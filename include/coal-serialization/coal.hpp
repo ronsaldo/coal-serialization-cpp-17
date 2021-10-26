@@ -28,6 +28,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <array>
 #include <string>
 #include <vector>
 #include <map>
@@ -59,6 +60,9 @@ typedef std::shared_ptr<ObjectMapper> ObjectMapperPtr;
 
 class SerializationCluster;
 typedef std::shared_ptr<SerializationCluster> SerializationClusterPtr;
+
+class FieldAccessor;
+typedef std::shared_ptr<FieldAccessor> FieldAccessorPtr;
 
 /**
  * The kind of a coal type descriptor.
@@ -118,6 +122,8 @@ enum class TypeDescriptorKind : uint8_t
     Map8 = 0x88,
     Map16 = 0x89,
     Map32 = 0x8A,
+
+    PrimitiveTypeDescriptorCount = Char32 + 1,
 };
 
 /**
@@ -179,13 +185,107 @@ public:
 };
 
 /**
+ * TypeDescriptorContext
+ */
+class TypeDescriptorContext
+{
+public:
+    TypeDescriptorPtr getOrCreatePrimitiveTypeDescriptor(TypeDescriptorKind kind)
+    {
+        auto &descriptor = primitiveTypeDescriptors[uint8_t(kind)];
+        if(!descriptor)
+        {
+            descriptor = std::make_shared<TypeDescriptor> ();
+            descriptor->kind = kind;
+        }
+
+        return descriptor;
+    }
+
+    template<typename T>
+    TypeDescriptorPtr getForType();
+
+private:
+    std::array<TypeDescriptorPtr, uint8_t(TypeDescriptorKind::PrimitiveTypeDescriptorCount)> primitiveTypeDescriptors;
+};
+
+template<typename T, typename C = void>
+struct TypeDescriptorFor;
+
+template<TypeDescriptorKind Kind >
+struct PrimitiveTypeDescriptorForKind
+{
+    static TypeDescriptorPtr apply(TypeDescriptorContext *context)
+    {
+        return context->getOrCreatePrimitiveTypeDescriptor(Kind);
+    }
+};
+
+template<>
+struct TypeDescriptorFor<bool> : PrimitiveTypeDescriptorForKind<TypeDescriptorKind::Boolean8> {};
+
+template<>
+struct TypeDescriptorFor<uint8_t> : PrimitiveTypeDescriptorForKind<TypeDescriptorKind::UInt8> {};
+
+template<>
+struct TypeDescriptorFor<uint16_t> : PrimitiveTypeDescriptorForKind<TypeDescriptorKind::UInt16> {};
+
+template<>
+struct TypeDescriptorFor<uint32_t> : PrimitiveTypeDescriptorForKind<TypeDescriptorKind::UInt32> {};
+
+template<>
+struct TypeDescriptorFor<uint64_t> : PrimitiveTypeDescriptorForKind<TypeDescriptorKind::UInt64> {};
+
+template<>
+struct TypeDescriptorFor<int8_t> : PrimitiveTypeDescriptorForKind<TypeDescriptorKind::Int8> {};
+
+template<>
+struct TypeDescriptorFor<int16_t> : PrimitiveTypeDescriptorForKind<TypeDescriptorKind::Int16> {};
+
+template<>
+struct TypeDescriptorFor<int32_t> : PrimitiveTypeDescriptorForKind<TypeDescriptorKind::Int32> {};
+
+template<>
+struct TypeDescriptorFor<int64_t> : PrimitiveTypeDescriptorForKind<TypeDescriptorKind::Int64> {};
+
+template<>
+struct TypeDescriptorFor<char> : PrimitiveTypeDescriptorForKind<TypeDescriptorKind::Char8> {};
+
+template<>
+struct TypeDescriptorFor<char16_t> : PrimitiveTypeDescriptorForKind<TypeDescriptorKind::Char16> {};
+
+template<>
+struct TypeDescriptorFor<char32_t> : PrimitiveTypeDescriptorForKind<TypeDescriptorKind::Char32> {};
+
+template<>
+struct TypeDescriptorFor<float> : PrimitiveTypeDescriptorForKind<TypeDescriptorKind::Float32> {};
+
+template<>
+struct TypeDescriptorFor<double> : PrimitiveTypeDescriptorForKind<TypeDescriptorKind::Float64> {};
+
+template<>
+struct TypeDescriptorFor<std::string> : PrimitiveTypeDescriptorForKind<TypeDescriptorKind::UTF8_32_32> {};
+
+template<>
+struct TypeDescriptorFor<std::u16string> : PrimitiveTypeDescriptorForKind<TypeDescriptorKind::UTF16_32_32> {};
+
+template<>
+struct TypeDescriptorFor<std::u32string> : PrimitiveTypeDescriptorForKind<TypeDescriptorKind::UTF32_32_32> {};
+
+template<typename T>
+inline TypeDescriptorPtr TypeDescriptorContext::getForType()
+{
+    return TypeDescriptorFor<T>::apply(this);
+}
+
+/**
  * Field desriptor
  */
 struct FieldDescriptor
 {
     std::string name;
     TypeDescriptorPtr typeDescriptor;
-    size_t offset = 0;
+    FieldAccessorPtr fieldAccessor;
 };
 
 typedef std::function<void (const FieldDescriptor &)> FieldDescriptorIterationBlock;
@@ -200,7 +300,39 @@ public:
     virtual ~ObjectMapper() {};
 
     virtual std::string getObjectTypeName() const = 0;
-    virtual void fieldDescriptorsDo(const FieldDescriptorIterationBlock &aBlock) const = 0;
+    virtual void fieldDescriptorsDo(TypeDescriptorContext *typeDescriptorContext, const FieldDescriptorIterationBlock &aBlock) = 0;
+};
+
+/**
+ * I am an accessor for a field.
+ */
+class FieldAccessor
+{
+public:
+    virtual ~FieldAccessor() {}
+};
+
+/**
+ * I am an accessor for a member field.
+ */
+template<typename CT, typename MT>
+class MemberFieldAccessor : public FieldAccessor
+{
+public:
+    typedef CT ClassType;
+    typedef MT MemberType;
+    typedef MemberType ClassType::*MemberPointerType;
+
+    MemberFieldAccessor(MemberPointerType initialMemberPointer)
+        : memberPointer(initialMemberPointer) {}
+
+    MemberPointerType memberPointer;
+};
+
+template<typename CT, typename MT>
+FieldAccessorPtr memberFieldAccessorFor(MT CT::*fieldPointer)
+{
+    return std::make_shared<MemberFieldAccessor<CT, MT>> (fieldPointer);
 };
 
 /**
@@ -211,6 +343,7 @@ class ValueBoxObject : public ObjectMapper
 {
 public:
     typedef VT ValueType;
+    typedef ValueBoxObject<VT> ThisType;
 
     ValueBoxObject(const VT &initialValue = VT())
         : value(initialValue) {}
@@ -220,10 +353,12 @@ public:
         return "ValueBox";
     }
 
-    void fieldDescriptorsDo(const FieldDescriptorIterationBlock &aBlock) const override
+    void fieldDescriptorsDo(TypeDescriptorContext *typeDescriptorContext, const FieldDescriptorIterationBlock &aBlock) override
     {
         aBlock(FieldDescriptor{
-
+            "value",
+            typeDescriptorContext->getForType<VT> (),
+            memberFieldAccessorFor(&ThisType::value)
         });
     }
 
@@ -327,13 +462,20 @@ public:
 
     void serializeRootObject(const ObjectMapperPtr &object)
     {
-        std::cout << "TODO: serializeRootObject " << object << std::endl;
+        traceObject(object);
     }
 
 private:
+    void traceObject(const ObjectMapperPtr &object)
+    {
+        std::cout << "TODO: traceObject " << object << std::endl;
+    }
+
     std::vector<uint8_t> &output;
     std::vector<SerializationClusterPtr> clusters;
     std::unordered_map<std::string, size_t> objectTypeNameToClusters;
+
+    std::vector<ObjectMapperPtr> tracingStack;
 };
 
 /**

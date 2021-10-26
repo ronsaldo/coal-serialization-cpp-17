@@ -28,9 +28,22 @@
 
 #include <cstdint>
 #include <memory>
+#include <string>
+#include <vector>
+#include <map>
+#include <set>
+#include <unordered_map>
+#include <unordered_set>
+
+#include <functional>
+#include <iostream>
 
 namespace coal
 {
+
+static constexpr uint32_t CoalMagicNumber = 0x4C414F43;
+static constexpr uint8_t CoalVersionMajor = 1;
+static constexpr uint8_t CoalVersionMinor = 0;
 
 class StructType;
 typedef std::shared_ptr<StructType> StructTypePtr;
@@ -40,6 +53,12 @@ typedef std::shared_ptr<TypeDescriptor> TypeDescriptorPtr;
 
 class ClusterDescription;
 typedef std::shared_ptr<ClusterDescription> ClusterDescriptionPtr;
+
+class ObjectMapper;
+typedef std::shared_ptr<ObjectMapper> ObjectMapperPtr;
+
+class SerializationCluster;
+typedef std::shared_ptr<SerializationCluster> SerializationClusterPtr;
 
 /**
  * The kind of a coal type descriptor.
@@ -84,6 +103,9 @@ enum class TypeDescriptorKind : uint8_t
     BigInt_32_8 = 0x23,
     BigInt_32_16 = 0x24,
     BigInt_32_32 = 0x25,
+    Char8 = 0x26,
+    Char16 = 0x27,
+    Char32 = 0x28,
 
     Struct = 0x80,
     FixedArray = 0x81,
@@ -155,6 +177,194 @@ public:
     TypeDescriptorPtr key;
     TypeDescriptorPtr value;
 };
+
+/**
+ * Field desriptor
+ */
+struct FieldDescriptor
+{
+    std::string name;
+    TypeDescriptorPtr typeDescriptor;
+    size_t offset = 0;
+};
+
+typedef std::function<void (const FieldDescriptor &)> FieldDescriptorIterationBlock;
+
+/**
+ * Object mapper interface.
+ * I am an interface used for gluing different kinds of objects with serializer and deserializer.
+ */
+class ObjectMapper
+{
+public:
+    virtual ~ObjectMapper() {};
+
+    virtual std::string getObjectTypeName() const = 0;
+    virtual void fieldDescriptorsDo(const FieldDescriptorIterationBlock &aBlock) const = 0;
+};
+
+/**
+ * I am a default value type box object.
+ */
+template<typename VT>
+class ValueBoxObject : public ObjectMapper
+{
+public:
+    typedef VT ValueType;
+
+    ValueBoxObject(const VT &initialValue = VT())
+        : value(initialValue) {}
+
+    std::string getObjectTypeName() const override
+    {
+        return "ValueBox";
+    }
+
+    void fieldDescriptorsDo(const FieldDescriptorIterationBlock &aBlock) const override
+    {
+        aBlock(FieldDescriptor{
+
+        });
+    }
+
+    VT value;
+};
+
+/**
+ * Tag for marking a serializable structure.
+ */
+struct SerializableStructureTag {};
+
+/**
+ * Tag for marking a serializable object class.
+ */
+struct SerializableObjectClassTag {};
+
+/**
+ * Makes an object mapper interface for the specified object.
+ */
+template<typename T, typename C=void>
+struct ObjectMapperFor;
+
+template<typename T>
+struct ValueBoxObjectMapperFor
+{
+    static ObjectMapperPtr apply(const T &value)
+    {
+        return std::make_shared<ValueBoxObject<T>> (value);
+    }    
+};
+
+template<>
+struct ObjectMapperFor<bool> : ValueBoxObjectMapperFor<bool> {};
+
+template<>
+struct ObjectMapperFor<uint8_t> : ValueBoxObjectMapperFor<uint8_t> {};
+
+template<>
+struct ObjectMapperFor<uint16_t> : ValueBoxObjectMapperFor<uint16_t> {};
+
+template<>
+struct ObjectMapperFor<uint32_t> : ValueBoxObjectMapperFor<uint32_t> {};
+
+template<>
+struct ObjectMapperFor<uint64_t> : ValueBoxObjectMapperFor<uint64_t> {};
+
+template<>
+struct ObjectMapperFor<int8_t> : ValueBoxObjectMapperFor<int8_t> {};
+
+template<>
+struct ObjectMapperFor<int16_t> : ValueBoxObjectMapperFor<int16_t> {};
+
+template<>
+struct ObjectMapperFor<int32_t> : ValueBoxObjectMapperFor<int32_t> {};
+
+template<>
+struct ObjectMapperFor<int64_t> : ValueBoxObjectMapperFor<int64_t> {};
+
+template<>
+struct ObjectMapperFor<char> : ValueBoxObjectMapperFor<char> {};
+
+template<>
+struct ObjectMapperFor<char16_t> : ValueBoxObjectMapperFor<char16_t> {};
+
+template<>
+struct ObjectMapperFor<char32_t> : ValueBoxObjectMapperFor<char32_t> {};
+
+template<>
+struct ObjectMapperFor<float> : ValueBoxObjectMapperFor<float> {};
+
+template<>
+struct ObjectMapperFor<double> : ValueBoxObjectMapperFor<double> {};
+
+template<>
+struct ObjectMapperFor<std::string> : ValueBoxObjectMapperFor<std::string> {};
+
+/**
+ * Serialization cluster
+ */
+class SerializationCluster
+{
+public:
+};
+
+/**
+ * Coal serializer.
+ */
+class Serializer
+{
+public:
+    Serializer(std::vector<uint8_t> &initialOutput)
+        : output(initialOutput)
+    {
+    }
+
+    template<typename ROT>
+    void serializeRootObjectOrValue(ROT &&root)
+    {
+        serializeRootObject(ObjectMapperFor<ROT>::apply(root));
+    }
+
+    void serializeRootObject(const ObjectMapperPtr &object)
+    {
+        std::cout << "TODO: serializeRootObject " << object << std::endl;
+    }
+
+private:
+    std::vector<uint8_t> &output;
+    std::vector<SerializationClusterPtr> clusters;
+    std::unordered_map<std::string, size_t> objectTypeNameToClusters;
+};
+
+/**
+ * Coal deserializer.
+ */
+class Deserializer
+{
+public:
+};
+
+/**
+ * Convenience method for serializing Coal objects and values.
+ */
+template<typename VT>
+std::vector<uint8_t> serialize(VT &&value)
+{
+    std::vector<uint8_t> result;
+    Serializer serializer(result);
+    serializer.serializeRootObjectOrValue(std::forward<VT> (value));
+    return result;
+}
+
+/**
+ * Convenience method for deserializing Coal objects and values.
+ */
+template<typename RT>
+RT deserialize(const std::vector<uint8_t> &data)
+{
+    (void)data;
+    return RT();
+}
 
 } // End of namespace coal
 

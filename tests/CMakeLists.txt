@@ -1,0 +1,2 @@
+add_executable(CoalSerializationTests SerializationTests.cpp)
+add_test(NAME RunCoalSerializationTests COMMAND CoalSerializationTests)

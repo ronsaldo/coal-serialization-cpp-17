@@ -64,6 +64,9 @@ typedef std::shared_ptr<SerializationCluster> SerializationClusterPtr;
 class FieldAccessor;
 typedef std::shared_ptr<FieldAccessor> FieldAccessorPtr;
 
+struct WriteStream;
+struct ReadStream;
+
 /**
  * The kind of a coal type descriptor.
  */
@@ -124,6 +127,138 @@ enum class TypeDescriptorKind : uint8_t
     Map32 = 0x8A,
 
     PrimitiveTypeDescriptorCount = Char32 + 1,
+};
+
+/**
+ * Binary blob builder
+ */
+class BinaryBlobBuilder
+{
+public:
+    std::vector<uint8_t> data;
+
+    size_t pushBytes(const uint8_t *bytes, size_t dataSize)
+    {
+        if(bytes == 0)
+            return 0;
+        
+        // TODO: Use a proper hash table for this case.
+        auto result = data.size();
+        data.insert(data.end(), bytes, bytes + dataSize);
+        return result;
+    }
+
+    size_t internString(const std::string &string)
+    {
+        if(string.empty())
+            return 0;
+
+        auto it = internedStrings.find(string);
+        if(it != internedStrings.end())
+            return it->second;
+        
+        auto result = pushBytes(reinterpret_cast<const uint8_t*> (string.data()), string.size());
+        internedStrings[string] = result;
+        return result;
+    }
+
+private:
+    std::unordered_map<std::string, size_t> internedStrings;
+};
+
+/**
+ * Interface for a write stream.
+ */
+class WriteStream
+{
+public:
+    virtual ~WriteStream() {}
+
+    virtual void writeBytes(const uint8_t *data, size_t size) = 0;
+
+    void writeUInt8(uint8_t value)
+    {
+        writeBytes(&value, 1);
+    }
+    
+    void writeUInt16(uint16_t value)
+    {
+        writeBytes(reinterpret_cast<uint8_t*> (&value), 2);
+    }
+    
+    void writeUInt32(uint32_t value)
+    {
+        writeBytes(reinterpret_cast<uint8_t*> (&value), 4);
+    }
+
+    void writeUInt64(uint64_t value)
+    {
+        writeBytes(reinterpret_cast<uint8_t*> (&value), 8);
+    }
+
+    void writeInt8(int8_t value)
+    {
+        writeBytes(reinterpret_cast<uint8_t*> (&value), 1);
+    }
+    
+    void writeInt16(int16_t value)
+    {
+        writeBytes(reinterpret_cast<uint8_t*> (&value), 2);
+    }
+    
+    void writeInt32(int32_t value)
+    {
+        writeBytes(reinterpret_cast<uint8_t*> (&value), 4);
+    }
+
+    void writeInt64(int64_t value)
+    {
+        writeBytes(reinterpret_cast<uint8_t*> (&value), 8);
+    }
+
+    void writeFloat32(float value)
+    {
+        writeBytes(reinterpret_cast<uint8_t*> (&value), 4);
+    }
+
+    void writeFloat64(float value)
+    {
+        writeBytes(reinterpret_cast<uint8_t*> (&value), 8);
+    }
+
+    void writeBlob(const BinaryBlobBuilder *theBlob)
+    {
+        blob = theBlob;
+        writeBytes(blob->data.data(), blob->data.size());
+    }
+
+private:
+    const BinaryBlobBuilder *blob = nullptr;
+};
+
+/**
+ * Interface for a read stream.
+ */
+struct ReadStream
+{
+    virtual ~ReadStream() {}
+};
+
+/**
+ * Memory write stream
+ */
+class MemoryWriteStream : public WriteStream
+{
+public:
+    MemoryWriteStream(std::vector<uint8_t> &initialOutput)
+        : output(initialOutput) {}
+
+    void writeBytes(const uint8_t *data, size_t size)
+    {
+        output.insert(output.end(), data, data + size);
+    }
+private:
+    std::vector<uint8_t> &output;
 };
 
 /**
@@ -286,6 +421,11 @@ struct FieldDescriptor
     std::string name;
     TypeDescriptorPtr typeDescriptor;
     FieldAccessorPtr fieldAccessor;
+
+    void pushDataIntoBinaryBlob(BinaryBlobBuilder &binaryBlobBuilder)
+    {
+        binaryBlobBuilder.internString(name);
+    }
 };
 
 typedef std::function<void (const FieldDescriptor &)> FieldDescriptorIterationBlock;
@@ -441,6 +581,27 @@ struct ObjectMapperFor<std::string> : ValueBoxObjectMapperFor<std::string> {};
 class SerializationCluster
 {
 public:
+    std::string name;
+    std::vector<ObjectMapperPtr> instances;
+    std::vector<FieldDescriptor> fieldDescriptors;
+    std::vector<size_t> objectFieldDescriptors;
+
+    void pushDataIntoBinaryBlob(BinaryBlobBuilder &binaryBlobBuilder)
+    {
+        binaryBlobBuilder.internString(name);
+        for(auto &descriptor : fieldDescriptors)
+            descriptor.pushDataIntoBinaryBlob(binaryBlobBuilder);
+    }
+
+    void addFieldDescriptor(const FieldDescriptor &descriptor)
+    {
+        fieldDescriptors.push_back(descriptor);
+    }
+
+    void addObject(const ObjectMapperPtr &object)
+    {
+        instances.push_back(object);
+    }
 };
 
 /**
@@ -449,7 +610,7 @@ public:
 class Serializer
 {
 public:
-    Serializer(std::vector<uint8_t> &initialOutput)
+    Serializer(WriteStream *initialOutput)
         : output(initialOutput)
     {
     }
@@ -462,20 +623,114 @@ public:
 
     void serializeRootObject(const ObjectMapperPtr &object)
     {
-        traceObject(object);
+        addPendingObject(object);
+        tracePendingObjects();
+
+        prepareForWriting();
+
+        writeHeader();
+        writeBlob();
+        writeValueTypeLayouts();
+        writeClusterDescriptions();
+        writeClusterInstances();
     }
 
 private:
-    void traceObject(const ObjectMapperPtr &object)
+    void addPendingObject(const ObjectMapperPtr &object)
     {
-        std::cout << "TODO: traceObject " << object << std::endl;
+        if(seenSet.find(object) != seenSet.end())
+            return;
+        
+        tracingStack.push_back(object);
+        seenSet.insert(object);
     }
 
-    std::vector<uint8_t> &output;
+    void tracePendingObjects()
+    {
+        while(!tracingStack.empty())
+        {
+            auto pendingObject = tracingStack.back();
+            tracingStack.pop_back();
+            tracePendingObject(pendingObject);
+        }
+    }
+
+    void tracePendingObject(const ObjectMapperPtr &object)
+    {
+        auto cluster = getOrCreateClusterFor(object);
+        cluster->addObject(object);
+    }
+
+    SerializationClusterPtr getOrCreateClusterFor(const ObjectMapperPtr &object)
+    {
+        auto typeName = object->getObjectTypeName();
+        auto it = objectTypeNameToClusters.find(typeName);
+        if(it != objectTypeNameToClusters.end())
+            return it->second;
+
+        auto newCluster = std::make_shared<SerializationCluster> ();
+        newCluster->name = typeName;
+        object->fieldDescriptorsDo(&typeDescriptorContext, [&](const FieldDescriptor &fieldDescriptor) {
+            newCluster->addFieldDescriptor(fieldDescriptor);
+        });
+
+        clusters.push_back(newCluster);
+        objectTypeNameToClusters.insert(std::make_pair(typeName, newCluster));
+        return newCluster;
+    }
+
+    void writeHeader()
+    {
+        output->writeUInt32(CoalMagicNumber);
+        output->writeUInt8(CoalVersionMajor);
+        output->writeUInt8(CoalVersionMinor);
+        output->writeUInt16(0); // Reserved
+
+        output->writeUInt32(binaryBlobBuilder.data.size()); // Blob size
+        output->writeUInt32(0); // TODO: Value type layouts size
+        output->writeUInt32(clusters.size()); // Cluster Count
+        output->writeUInt32(objectCount); // Cluster Count
+    }
+
+    void writeBlob()
+    {
+        output->writeBlob(&binaryBlobBuilder);
+    }
+
+    void writeValueTypeLayouts()
+    {
+    }
+
+    void writeClusterDescriptions()
+    {
+    }
+
+    void writeClusterInstances()
+    {
+    }
+
+    void prepareForWriting()
+    {
+        objectCount = 0;
+        for(auto & cluster : clusters)
+        {
+            cluster->pushDataIntoBinaryBlob(binaryBlobBuilder);
+            for(auto instance : cluster->instances)
+                objectToInstanceIndexTable[instance] = objectCount++;
+        }
+    }
+
+    WriteStream *output;
+
+    TypeDescriptorContext typeDescriptorContext;
+    BinaryBlobBuilder binaryBlobBuilder;
+    size_t objectCount;
     std::vector<SerializationClusterPtr> clusters;
-    std::unordered_map<std::string, size_t> objectTypeNameToClusters;
+    std::unordered_map<std::string, SerializationClusterPtr> objectTypeNameToClusters;
 
     std::vector<ObjectMapperPtr> tracingStack;
+    std::unordered_set<ObjectMapperPtr> seenSet;
+    std::unordered_map<ObjectMapperPtr, size_t> objectToInstanceIndexTable;
 };
 
 /**
@@ -493,7 +748,8 @@ template<typename VT>
 std::vector<uint8_t> serialize(VT &&value)
 {
     std::vector<uint8_t> result;
-    Serializer serializer(result);
+    MemoryWriteStream output(result);
+    Serializer serializer(&output);
     serializer.serializeRootObjectOrValue(std::forward<VT> (value));
     return result;
 }

@@ -118,16 +118,17 @@ enum class TypeDescriptorKind : uint8_t
     Char32 = 0x28,
 
     Struct = 0x80,
-    FixedArray = 0x81,
-    Array8 = 0x82,
-    Array16 = 0x83,
-    Array32 = 0x84,
-    Set8 = 0x85,
-    Set16 = 0x86,
-    Set32 = 0x87,
-    Map8 = 0x88,
-    Map16 = 0x89,
-    Map32 = 0x8A,
+    TypedObject = 0x81,
+    FixedArray = 0x82,
+    Array8 = 0x83,
+    Array16 = 0x84,
+    Array32 = 0x85,
+    Set8 = 0x86,
+    Set16 = 0x87,
+    Set32 = 0x88,
+    Map8 = 0x89,
+    Map16 = 0x8A,
+    Map32 = 0x8B,
 
     PrimitiveTypeDescriptorCount = Char32 + 1,
 };
@@ -140,7 +141,7 @@ class BinaryBlobBuilder
 public:
     std::vector<uint8_t> data;
 
-    uint32_t getExistentForBytes(const uint8_t *bytes, size_t dataSize) const
+    uint32_t getOffsetForBytes(const uint8_t *bytes, size_t dataSize) const
     {
         if(dataSize == 0)
             return 0;
@@ -290,7 +291,7 @@ public:
     {
         assert(blob);
         auto dataSize = uint8_t(std::min(string.size(), size_t(0xFF)));
-        writeUInt32(blob->getExistentForBytes(reinterpret_cast<const uint8_t*> (string.data()), dataSize));
+        writeUInt32(blob->getOffsetForBytes(reinterpret_cast<const uint8_t*> (string.data()), dataSize));
         writeUInt8(dataSize);
     }
 
@@ -298,7 +299,7 @@ public:
     {
         assert(blob);
         auto dataSize = uint16_t(std::min(string.size(), size_t(0xFFFF)));
-        writeUInt32(blob->getExistentForBytes(reinterpret_cast<const uint8_t*> (string.data()), dataSize));
+        writeUInt32(blob->getOffsetForBytes(reinterpret_cast<const uint8_t*> (string.data()), dataSize));
         writeUInt16(dataSize);
     }
 
@@ -306,7 +307,7 @@ public:
     {
         assert(blob);
         auto dataSize = uint32_t(std::min(string.size(), size_t(0xFFFFFFFF)));
-        writeUInt32(blob->getExistentForBytes(reinterpret_cast<const uint8_t*> (string.data()), dataSize));
+        writeUInt32(blob->getOffsetForBytes(reinterpret_cast<const uint8_t*> (string.data()), dataSize));
         writeUInt32(dataSize);
     }
 

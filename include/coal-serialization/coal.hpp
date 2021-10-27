@@ -55,14 +55,18 @@ typedef std::shared_ptr<StructType> StructTypePtr;
 class TypeDescriptor;
 typedef std::shared_ptr<TypeDescriptor> TypeDescriptorPtr;
 
-class ClusterDescription;
-typedef std::shared_ptr<ClusterDescription> ClusterDescriptionPtr;
+class TypeDescriptorContext;
+
+class TypeMapper;
+typedef std::shared_ptr<TypeMapper> TypeMapperPtr;
+typedef std::weak_ptr<TypeMapper> TypeMapperWeakPtr;
 
 class ObjectMapper;
 typedef std::shared_ptr<ObjectMapper> ObjectMapperPtr;
 
 class SerializationCluster;
 typedef std::shared_ptr<SerializationCluster> SerializationClusterPtr;
+typedef std::weak_ptr<SerializationCluster> SerializationClusterWeakPtr;
 
 class FieldAccessor;
 typedef std::shared_ptr<FieldAccessor> FieldAccessorPtr;
@@ -133,6 +137,67 @@ enum class TypeDescriptorKind : uint8_t
     PrimitiveTypeDescriptorCount = Char32 + 1,
 };
 
+inline const char *typeDescriptorKindToString(TypeDescriptorKind kind)
+{
+    switch(kind)
+    {
+    case TypeDescriptorKind::Object: return "Object";
+    case TypeDescriptorKind::Boolean8: return "Boolean8";
+    case TypeDescriptorKind::Boolean16: return "Boolean16";
+    case TypeDescriptorKind::Boolean32: return "Boolean32";
+    case TypeDescriptorKind::Boolean64: return "Boolean64";
+    case TypeDescriptorKind::UInt8: return "UInt8";
+    case TypeDescriptorKind::UInt16: return "UInt16";
+    case TypeDescriptorKind::UInt32: return "UInt32";
+    case TypeDescriptorKind::UInt64: return "UInt64";
+    case TypeDescriptorKind::UInt128: return "UInt128";
+    case TypeDescriptorKind::Int8: return "Int8";
+    case TypeDescriptorKind::Int16: return "Int16";
+    case TypeDescriptorKind::Int32: return "Int32";
+    case TypeDescriptorKind::Int64: return "Int64";
+    case TypeDescriptorKind::Int128: return "Int128";
+    case TypeDescriptorKind::Float16: return "Float16";
+    case TypeDescriptorKind::Float32: return "Float32";
+    case TypeDescriptorKind::Float64: return "Float64";
+    case TypeDescriptorKind::Float128: return "Float128";
+    case TypeDescriptorKind::Float256: return "Float256";
+    case TypeDescriptorKind::Decimal32: return "Decimal32";
+    case TypeDescriptorKind::Decimal64: return "Decimal64";
+    case TypeDescriptorKind::Decimal128: return "Decimal128";
+    case TypeDescriptorKind::Binary_32_8: return "Binary_32_8";
+    case TypeDescriptorKind::Binary_32_16: return "Binary_32_16";
+    case TypeDescriptorKind::Binary_32_32: return "Binary_32_32";
+    case TypeDescriptorKind::UTF8_32_8: return "UTF8_32_8";
+    case TypeDescriptorKind::UTF8_32_16: return "UTF8_32_16";
+    case TypeDescriptorKind::UTF8_32_32: return "UTF8_32_32";
+    case TypeDescriptorKind::UTF16_32_8: return "UTF16_32_8";
+    case TypeDescriptorKind::UTF16_32_16: return "UTF16_32_16";
+    case TypeDescriptorKind::UTF16_32_32: return "UTF16_32_32";
+    case TypeDescriptorKind::UTF32_32_8: return "UTF32_32_8";
+    case TypeDescriptorKind::UTF32_32_16: return "UTF32_32_16";
+    case TypeDescriptorKind::UTF32_32_32: return "UTF32_32_32";
+    case TypeDescriptorKind::BigInt_32_8: return "BigInt_32_8";
+    case TypeDescriptorKind::BigInt_32_16: return "BigInt_32_16";
+    case TypeDescriptorKind::BigInt_32_32: return "BigInt_32_32";
+    case TypeDescriptorKind::Char8: return "Char8";
+    case TypeDescriptorKind::Char16: return "Char16";
+    case TypeDescriptorKind::Char32: return "Char32";
+
+    case TypeDescriptorKind::Struct: return "Struct";
+    case TypeDescriptorKind::TypedObject: return "TypedObject";
+    case TypeDescriptorKind::FixedArray: return "FixedArray";
+    case TypeDescriptorKind::Array8: return "Array8";
+    case TypeDescriptorKind::Array16: return "Array16";
+    case TypeDescriptorKind::Array32: return "Array32";
+    case TypeDescriptorKind::Set8: return "Set8";
+    case TypeDescriptorKind::Set16: return "Set16";
+    case TypeDescriptorKind::Set32: return "Set32";
+    case TypeDescriptorKind::Map8: return "Map8";
+    case TypeDescriptorKind::Map16: return "Map16";
+    case TypeDescriptorKind::Map32: return "Map32";
+    default: abort();
+    }
+}
 /**
  * Binary blob builder
  */
@@ -311,8 +376,16 @@ public:
         writeUInt32(dataSize);
     }
 
+    void setTypeDescriptorContext(TypeDescriptorContext *context)
+    {
+        typeDescriptorContext = context;
+    }
+
+    void writeTypeDescriptorForTypeMapper(const TypeMapperPtr &typeMapper);
+
 private:
     const BinaryBlobBuilder *blob = nullptr;
+    TypeDescriptorContext *typeDescriptorContext = nullptr;
 };
 
 /**
@@ -455,90 +528,39 @@ public:
         return descriptor;
     }
 
-    template<typename T>
-    TypeDescriptorPtr getForType();
+    TypeDescriptorPtr getForTypeMapper(const TypeMapperPtr &mapper);
+
+    uint32_t getValueTypeCount()
+    {
+        return uint32_t(valueTypes.size());
+    }
+
+    void writeValueTypeLayoutsWith(WriteStream *output)
+    {
+        (void)output;
+        // TODO: Implement this part
+    }
 
 private:
     std::array<TypeDescriptorPtr, uint8_t(TypeDescriptorKind::PrimitiveTypeDescriptorCount)> primitiveTypeDescriptors;
+
+    std::vector<TypeMapperPtr> valueTypes;
+    std::unordered_map<TypeMapperPtr, TypeDescriptorPtr> mapperToDescriptorMap;
 };
 
-template<typename T, typename C = void>
-struct TypeDescriptorFor;
-
-template<TypeDescriptorKind Kind >
-struct PrimitiveTypeDescriptorForKind
+void WriteStream::writeTypeDescriptorForTypeMapper(const TypeMapperPtr &typeMapper)
 {
-    static TypeDescriptorPtr apply(TypeDescriptorContext *context)
-    {
-        return context->getOrCreatePrimitiveTypeDescriptor(Kind);
-    }
-};
-
-template<>
-struct TypeDescriptorFor<bool> : PrimitiveTypeDescriptorForKind<TypeDescriptorKind::Boolean8> {};
-
-template<>
-struct TypeDescriptorFor<uint8_t> : PrimitiveTypeDescriptorForKind<TypeDescriptorKind::UInt8> {};
-
-template<>
-struct TypeDescriptorFor<uint16_t> : PrimitiveTypeDescriptorForKind<TypeDescriptorKind::UInt16> {};
-
-template<>
-struct TypeDescriptorFor<uint32_t> : PrimitiveTypeDescriptorForKind<TypeDescriptorKind::UInt32> {};
-
-template<>
-struct TypeDescriptorFor<uint64_t> : PrimitiveTypeDescriptorForKind<TypeDescriptorKind::UInt64> {};
-
-template<>
-struct TypeDescriptorFor<int8_t> : PrimitiveTypeDescriptorForKind<TypeDescriptorKind::Int8> {};
-
-template<>
-struct TypeDescriptorFor<int16_t> : PrimitiveTypeDescriptorForKind<TypeDescriptorKind::Int16> {};
-
-template<>
-struct TypeDescriptorFor<int32_t> : PrimitiveTypeDescriptorForKind<TypeDescriptorKind::Int32> {};
-
-template<>
-struct TypeDescriptorFor<int64_t> : PrimitiveTypeDescriptorForKind<TypeDescriptorKind::Int64> {};
-
-template<>
-struct TypeDescriptorFor<char> : PrimitiveTypeDescriptorForKind<TypeDescriptorKind::Char8> {};
-
-template<>
-struct TypeDescriptorFor<char16_t> : PrimitiveTypeDescriptorForKind<TypeDescriptorKind::Char16> {};
-
-template<>
-struct TypeDescriptorFor<char32_t> : PrimitiveTypeDescriptorForKind<TypeDescriptorKind::Char32> {};
-
-template<>
-struct TypeDescriptorFor<float> : PrimitiveTypeDescriptorForKind<TypeDescriptorKind::Float32> {};
-
-template<>
-struct TypeDescriptorFor<double> : PrimitiveTypeDescriptorForKind<TypeDescriptorKind::Float64> {};
-
-template<>
-struct TypeDescriptorFor<std::string> : PrimitiveTypeDescriptorForKind<TypeDescriptorKind::UTF8_32_32> {};
-
-template<>
-struct TypeDescriptorFor<std::u16string> : PrimitiveTypeDescriptorForKind<TypeDescriptorKind::UTF16_32_32> {};
-
-template<>
-struct TypeDescriptorFor<std::u32string> : PrimitiveTypeDescriptorForKind<TypeDescriptorKind::UTF32_32_32> {};
-
-template<typename T>
-inline TypeDescriptorPtr TypeDescriptorContext::getForType()
-{
-    return TypeDescriptorFor<T>::apply(this);
+    typeDescriptorContext->getForTypeMapper(typeMapper)->writeDescriptionWith(this);
 }
 
 /**
  * Field desriptor
  */
-struct FieldDescriptor
+struct FieldDescription
 {
     std::string name;
-    TypeDescriptorPtr typeDescriptor;
-    FieldAccessorPtr fieldAccessor;
+    TypeMapperWeakPtr typeMapper;
+    FieldAccessorPtr accessor;
 
     void pushDataIntoBinaryBlob(BinaryBlobBuilder &binaryBlobBuilder) const
     {
@@ -548,25 +570,58 @@ struct FieldDescriptor
     void writeDescriptionWith(WriteStream *output) const
     {
         output->writeUTF8_32_16(name);
-        typeDescriptor->writeDescriptionWith(output);
+        output->writeTypeDescriptorForTypeMapper(typeMapper.lock());
     }
 };
 
-typedef std::function<void (const FieldDescriptor &)> FieldDescriptorIterationBlock;
+typedef std::function<void (const FieldDescription &)> FieldDescriptionIterationBlock;
 
 /**
- * Object mapper interface.
- * I am an interface used for gluing different kinds of objects with serializer and deserializer.
+ * Type mapper interface.
+ * I am an interface used for describing and serializing the contents of specific types.
  */
-class ObjectMapper
+class TypeMapper
 {
 public:
-    virtual ~ObjectMapper() {};
+    virtual ~TypeMapper() {};
 
-    virtual std::string getObjectTypeName() const = 0;
-    virtual void fieldDescriptorsDo(TypeDescriptorContext *typeDescriptorContext, const FieldDescriptorIterationBlock &aBlock) = 0;
-    virtual void *getObjectBasePointer() = 0;
+    virtual bool isObjectType() const
+    {
+        return false;
+    }
+
+    virtual bool isReferenceType() const
+    {
+        return false;
+    }
+
+    virtual const std::string &getName() const = 0;
+    virtual void pushDataIntoBinaryBlob(BinaryBlobBuilder &binaryBlobBuilder) = 0;
+
+    virtual uint16_t getFieldCount() const = 0;
+    virtual void writeFieldDescriptionsWith(WriteStream *output) const = 0;
+    virtual void writeInstanceWith(void *basePointer, WriteStream *output)
+    {
+        (void)basePointer;
+        (void)output;
+        abort();
+    }
+
+    virtual void writeFieldWith(void *fieldPointer, WriteStream *output) = 0;
+
+    virtual TypeDescriptorPtr getOrCreateTypeDescriptor(TypeDescriptorContext *context) = 0;
 };
+
+inline TypeDescriptorPtr TypeDescriptorContext::getForTypeMapper(const TypeMapperPtr &mapper)
+{
+    auto it = mapperToDescriptorMap.find(mapper);
+    if(it != mapperToDescriptorMap.end())
+        return it->second;
+
+    auto descriptor = mapper->getOrCreateTypeDescriptor(this);
+    mapperToDescriptorMap.insert({mapper, descriptor});
+    return descriptor;
+}
 
 /**
  * I am an accessor for a field.
@@ -577,6 +632,241 @@ public:
     virtual ~FieldAccessor() {}
 
     virtual void *getPointerForBasePointer(void *basePointer) = 0;
+};
+
+/**
+ * Aggregate type mapper
+ * I am object type mapper
+ */
+class PrimitiveTypeMapper : public TypeMapper
+{
+public:
+
+    virtual const std::string &getName() const override
+    {
+        return name;
+    }
+
+    virtual void pushDataIntoBinaryBlob(BinaryBlobBuilder &) override
+    {
+        // Nothing is required here.
+    }
+
+    virtual uint16_t getFieldCount() const override
+    {
+        return 0;
+    }
+
+    virtual void writeFieldDescriptionsWith(WriteStream *) const
+    {
+    }
+
+    virtual void writeInstanceWith(void *, WriteStream *) override
+    {
+        abort();
+    }
+
+    std::string name;
+};
+
+/**
+ * Aggregate type mapper
+ * I am object type mapper
+ */
+class AggregateTypeMapper : public TypeMapper
+{
+public:
+
+    virtual const std::string &getName() const override
+    {
+        return name;
+    }
+
+    virtual void pushDataIntoBinaryBlob(BinaryBlobBuilder &binaryBlobBuilder) override
+    {
+        binaryBlobBuilder.internString16(name);
+        for(auto &field : fields)
+            binaryBlobBuilder.internString16(field.name);
+    }
+
+    virtual uint16_t getFieldCount() const override
+    {
+        return uint16_t(fields.size());
+    }
+
+    virtual void writeFieldDescriptionsWith(WriteStream *output) const override
+    {
+        for(auto &field : fields)
+            field.writeDescriptionWith(output);
+    }
+
+    virtual void writeInstanceWith(void *basePointer, WriteStream *output) override
+    {
+        for(auto &field : fields)
+        {
+            auto fieldPointer = field.accessor->getPointerForBasePointer(basePointer);
+            field.typeMapper.lock()->writeFieldWith(fieldPointer, output);
+        }
+    }
+    std::string name;
+    std::vector<FieldDescription> fields;
+};
+
+/**
+ * Structure type mapper
+ * I am object type mapper
+ */
+class ObjectTypeMapper : public AggregateTypeMapper
+{
+public:
+
+    virtual bool isObjectType() const
+    {
+        return true;
+    }
+
+    static TypeMapperPtr makeWithFields(const std::string &name, const TypeMapperPtr &superType, const std::vector<FieldDescription> &fields)
+    {
+        auto result = std::make_shared<ObjectTypeMapper> ();
+        result->name = name;
+        result->superType = superType;
+        result->fields = fields;
+        return result;
+    }
+
+    virtual void writeFieldWith(void *, WriteStream *)
+    {
+        // This is implemented in a separate location.
+        abort();
+    }
+
+    virtual TypeDescriptorPtr getOrCreateTypeDescriptor(TypeDescriptorContext *)
+    {
+        abort();
+    }
+
+    TypeMapperWeakPtr superType;
+};
+
+/**
+ * Structure type mapper
+ * I am object type mapper
+ */
+class StructureTypeMapper : public AggregateTypeMapper
+{
+public:
+    virtual void writeFieldWith(void *fieldPointer, WriteStream *output)
+    {
+        writeInstanceWith(fieldPointer, output);
+    }
+
+};
+
+template<typename FT, TypeDescriptorKind TDK>
+class NumericPrimitiveTypeMapper : public PrimitiveTypeMapper
+{
+public:
+    typedef FT FieldType;
+    typedef NumericPrimitiveTypeMapper<FT, TDK> ThisType;
+
+    static constexpr TypeDescriptorKind EncodingDescriptorKind = TDK;
+
+    static TypeMapperPtr uniqueInstance()
+    {
+        static auto singleton = std::make_shared<ThisType> ();
+        return singleton;
+    }
+
+    NumericPrimitiveTypeMapper()
+    {
+        name = typeDescriptorKindToString(EncodingDescriptorKind);
+    }
+
+    virtual void writeFieldWith(void *fieldPointer, WriteStream *output) override
+    {
+        output->writeBytes(reinterpret_cast<const uint8_t*> (fieldPointer), sizeof(FieldType));
+    }
+
+    TypeDescriptorPtr getOrCreateTypeDescriptor(TypeDescriptorContext *context)
+    {
+        return context->getOrCreatePrimitiveTypeDescriptor(EncodingDescriptorKind);
+    }
+};
+
+/**
+ * Makes a type mapper for the specified type.
+ */
+template<typename T, typename C=void>
+struct TypeMapperFor;
+
+template<typename T>
+struct SingletonTypeMapperFor
+{
+    static TypeMapperPtr apply()
+    {
+        return T::uniqueInstance();
+    }
+};
+
+template<>
+struct TypeMapperFor<bool> : SingletonTypeMapperFor<NumericPrimitiveTypeMapper<bool, TypeDescriptorKind::Boolean8>> {};
+
+template<>
+struct TypeMapperFor<uint8_t> : SingletonTypeMapperFor<NumericPrimitiveTypeMapper<uint8_t, TypeDescriptorKind::UInt8>> {};
+
+template<>
+struct TypeMapperFor<uint16_t> : SingletonTypeMapperFor<NumericPrimitiveTypeMapper<uint16_t, TypeDescriptorKind::UInt16>> {};
+
+template<>
+struct TypeMapperFor<uint32_t> : SingletonTypeMapperFor<NumericPrimitiveTypeMapper<uint32_t, TypeDescriptorKind::UInt32>> {};
+
+template<>
+struct TypeMapperFor<uint64_t> : SingletonTypeMapperFor<NumericPrimitiveTypeMapper<uint64_t, TypeDescriptorKind::UInt64>> {};
+
+template<>
+struct TypeMapperFor<int8_t> : SingletonTypeMapperFor<NumericPrimitiveTypeMapper<int8_t, TypeDescriptorKind::Int8>> {};
+
+template<>
+struct TypeMapperFor<int16_t> : SingletonTypeMapperFor<NumericPrimitiveTypeMapper<int16_t, TypeDescriptorKind::Int16>> {};
+
+template<>
+struct TypeMapperFor<int32_t> : SingletonTypeMapperFor<NumericPrimitiveTypeMapper<int32_t, TypeDescriptorKind::Int32>> {};
+
+template<>
+struct TypeMapperFor<int64_t> : SingletonTypeMapperFor<NumericPrimitiveTypeMapper<int64_t, TypeDescriptorKind::Int64>> {};
+
+template<>
+struct TypeMapperFor<char> : SingletonTypeMapperFor<NumericPrimitiveTypeMapper<char, TypeDescriptorKind::Char8>> {};
+
+template<>
+struct TypeMapperFor<char16_t> : SingletonTypeMapperFor<NumericPrimitiveTypeMapper<char16_t, TypeDescriptorKind::Char16>> {};
+
+template<>
+struct TypeMapperFor<char32_t> : SingletonTypeMapperFor<NumericPrimitiveTypeMapper<char32_t, TypeDescriptorKind::Char32>> {};
+
+template<>
+struct TypeMapperFor<float> : SingletonTypeMapperFor<NumericPrimitiveTypeMapper<float, TypeDescriptorKind::Float32>> {};
+
+template<>
+struct TypeMapperFor<double> : SingletonTypeMapperFor<NumericPrimitiveTypeMapper<double, TypeDescriptorKind::Float64>> {};
+
+template<typename T>
+inline TypeMapperPtr typeMapperForType()
+{
+    return TypeMapperFor<T>::apply();
+}
+
+/**
+ * Object mapper interface.
+ * I am an interface used for gluing different kinds of objects with serializer and deserializer.
+ */
+class ObjectMapper
+{
+public:
+    virtual ~ObjectMapper() {};
+
+    virtual TypeMapperPtr getTypeMapper() const = 0;
+    virtual void *getObjectBasePointer() = 0;
 };
 
 /**
@@ -612,27 +902,25 @@ FieldAccessorPtr memberFieldAccessorFor(MT CT::*fieldPointer)
  * I am a default value type box object.
  */
 template<typename VT>
-class ValueBoxObject : public ObjectMapper
+class RootValueBox : public ObjectMapper
 {
 public:
     typedef VT ValueType;
-    typedef ValueBoxObject<VT> ThisType;
+    typedef RootValueBox<VT> ThisType;
 
-    ValueBoxObject(const VT &initialValue = VT())
+    RootValueBox(const VT &initialValue = VT())
         : value(initialValue) {}
 
-    virtual std::string getObjectTypeName() const override
+    virtual TypeMapperPtr getTypeMapper() const override
     {
-        return "ValueBox";
-    }
-
-    virtual void fieldDescriptorsDo(TypeDescriptorContext *typeDescriptorContext, const FieldDescriptorIterationBlock &aBlock) override
-    {
-        aBlock(FieldDescriptor{
-            "value",
-            typeDescriptorContext->getForType<VT> (),
-            memberFieldAccessorFor(&ThisType::value)
+        static auto singleton = ObjectTypeMapper::makeWithFields("RootValueBox", nullptr, {
+            FieldDescription{
+                "value",
+                typeMapperForType<ValueType> (),
+                memberFieldAccessorFor(&ThisType::value)
+            }
         });
+        return singleton;
     }
 
     virtual void *getObjectBasePointer() override
@@ -660,58 +948,58 @@ template<typename T, typename C=void>
 struct ObjectMapperFor;
 
 template<typename T>
-struct ValueBoxObjectMapperFor
+struct RootValueBoxMapperFor
 {
     static ObjectMapperPtr apply(const T &value)
     {
-        return std::make_shared<ValueBoxObject<T>> (value);
+        return std::make_shared<RootValueBox<T>> (value);
     }    
 };
 
 template<>
-struct ObjectMapperFor<bool> : ValueBoxObjectMapperFor<bool> {};
+struct ObjectMapperFor<bool> : RootValueBoxMapperFor<bool> {};
 
 template<>
-struct ObjectMapperFor<uint8_t> : ValueBoxObjectMapperFor<uint8_t> {};
+struct ObjectMapperFor<uint8_t> : RootValueBoxMapperFor<uint8_t> {};
 
 template<>
-struct ObjectMapperFor<uint16_t> : ValueBoxObjectMapperFor<uint16_t> {};
+struct ObjectMapperFor<uint16_t> : RootValueBoxMapperFor<uint16_t> {};
 
 template<>
-struct ObjectMapperFor<uint32_t> : ValueBoxObjectMapperFor<uint32_t> {};
+struct ObjectMapperFor<uint32_t> : RootValueBoxMapperFor<uint32_t> {};
 
 template<>
-struct ObjectMapperFor<uint64_t> : ValueBoxObjectMapperFor<uint64_t> {};
+struct ObjectMapperFor<uint64_t> : RootValueBoxMapperFor<uint64_t> {};
 
 template<>
-struct ObjectMapperFor<int8_t> : ValueBoxObjectMapperFor<int8_t> {};
+struct ObjectMapperFor<int8_t> : RootValueBoxMapperFor<int8_t> {};
 
 template<>
-struct ObjectMapperFor<int16_t> : ValueBoxObjectMapperFor<int16_t> {};
+struct ObjectMapperFor<int16_t> : RootValueBoxMapperFor<int16_t> {};
 
 template<>
-struct ObjectMapperFor<int32_t> : ValueBoxObjectMapperFor<int32_t> {};
+struct ObjectMapperFor<int32_t> : RootValueBoxMapperFor<int32_t> {};
 
 template<>
-struct ObjectMapperFor<int64_t> : ValueBoxObjectMapperFor<int64_t> {};
+struct ObjectMapperFor<int64_t> : RootValueBoxMapperFor<int64_t> {};
 
 template<>
-struct ObjectMapperFor<char> : ValueBoxObjectMapperFor<char> {};
+struct ObjectMapperFor<char> : RootValueBoxMapperFor<char> {};
 
 template<>
-struct ObjectMapperFor<char16_t> : ValueBoxObjectMapperFor<char16_t> {};
+struct ObjectMapperFor<char16_t> : RootValueBoxMapperFor<char16_t> {};
 
 template<>
-struct ObjectMapperFor<char32_t> : ValueBoxObjectMapperFor<char32_t> {};
+struct ObjectMapperFor<char32_t> : RootValueBoxMapperFor<char32_t> {};
 
 template<>
-struct ObjectMapperFor<float> : ValueBoxObjectMapperFor<float> {};
+struct ObjectMapperFor<float> : RootValueBoxMapperFor<float> {};
 
 template<>
-struct ObjectMapperFor<double> : ValueBoxObjectMapperFor<double> {};
+struct ObjectMapperFor<double> : RootValueBoxMapperFor<double> {};
 
 template<>
-struct ObjectMapperFor<std::string> : ValueBoxObjectMapperFor<std::string> {};
+struct ObjectMapperFor<std::string> : RootValueBoxMapperFor<std::string> {};
 
 /**
  * Serialization cluster
@@ -719,25 +1007,17 @@ struct ObjectMapperFor<std::string> : ValueBoxObjectMapperFor<std::string> {};
 class SerializationCluster
 {
 public:
+    size_t index = 0;
     std::string name;
+    SerializationClusterWeakPtr supertype;
+    TypeMapperPtr typeMapper;
     std::vector<ObjectMapperPtr> instances;
-    std::vector<FieldDescriptor> fieldDescriptors;
-    std::vector<size_t> blobFieldDescriptors;
-    std::vector<size_t> objectFieldDescriptors;
+    std::vector<size_t> objectFieldDescriptions;
 
     void pushDataIntoBinaryBlob(BinaryBlobBuilder &binaryBlobBuilder)
     {
         binaryBlobBuilder.internString16(name);
-        for(auto &descriptor : fieldDescriptors)
-            descriptor.pushDataIntoBinaryBlob(binaryBlobBuilder);
-
-        if(blobFieldDescriptors.empty())
-            return;
-    }
-
-    void addFieldDescriptor(const FieldDescriptor &descriptor)
-    {
-        fieldDescriptors.push_back(descriptor);
+        typeMapper->pushDataIntoBinaryBlob(binaryBlobBuilder);
     }
 
     void addObject(const ObjectMapperPtr &object)
@@ -747,11 +1027,12 @@ public:
 
     void writeDescriptionWith(WriteStream *output)
     {
+        auto super = supertype.lock();
         output->writeUTF8_32_16(name);
-        output->writeUInt16(fieldDescriptors.size());
+        output->writeUInt32(super ? super->index + 1 : 0);
+        output->writeUInt16(typeMapper->getFieldCount());
         output->writeUInt32(instances.size());
-        for(const auto &field : fieldDescriptors)
-            field.writeDescriptionWith(output);
+        typeMapper->writeFieldDescriptionsWith(output);
     }
 
     void writeInstancesWith(WriteStream *output)
@@ -759,11 +1040,7 @@ public:
         for(const auto &instance : instances)
         {
             auto basePointer = instance->getObjectBasePointer();
-            for(const auto &field : fieldDescriptors)
-            {
-                auto fieldPointer = field.fieldAccessor->getPointerForBasePointer(basePointer);
-                std::cout << "TODO: Write field at: " << fieldPointer << std::endl;
-            }  
+            typeMapper->writeInstanceWith(basePointer, output);
         }
     }
 };
@@ -821,25 +1098,23 @@ private:
 
     void tracePendingObject(const ObjectMapperPtr &object)
     {
-        auto cluster = getOrCreateClusterFor(object);
+        auto typeMapper = object->getTypeMapper();
+        auto cluster = getOrCreateClusterFor(typeMapper);
         cluster->addObject(object);
     }
 
-    SerializationClusterPtr getOrCreateClusterFor(const ObjectMapperPtr &object)
+    SerializationClusterPtr getOrCreateClusterFor(const TypeMapperPtr &typeMapper)
     {
-        auto typeName = object->getObjectTypeName();
-        auto it = objectTypeNameToClusters.find(typeName);
-        if(it != objectTypeNameToClusters.end())
+        auto it = typeMapperToClustersMap.find(typeMapper);
+        if(it != typeMapperToClustersMap.end())
             return it->second;
 
         auto newCluster = std::make_shared<SerializationCluster> ();
-        newCluster->name = typeName;
-        object->fieldDescriptorsDo(&typeDescriptorContext, [&](const FieldDescriptor &fieldDescriptor) {
-            newCluster->addFieldDescriptor(fieldDescriptor);
-        });
-
+        newCluster->name = typeMapper->getName();
+        newCluster->typeMapper = typeMapper;
+        newCluster->index = clusters.size();
         clusters.push_back(newCluster);
-        objectTypeNameToClusters.insert(std::make_pair(typeName, newCluster));
+        typeMapperToClustersMap.insert(std::make_pair(typeMapper, newCluster));
         return newCluster;
     }
 
@@ -851,7 +1126,7 @@ private:
         output->writeUInt16(0); // Reserved
 
         output->writeUInt32(binaryBlobBuilder.data.size()); // Blob size
-        output->writeUInt32(0); // TODO: Value type layouts size
+        output->writeUInt32(typeDescriptorContext.getValueTypeCount()); // Value type layouts size
         output->writeUInt32(clusters.size()); // Cluster Count
         output->writeUInt32(objectCount); // Cluster Count
     }
@@ -863,7 +1138,8 @@ private:
 
     void writeValueTypeLayouts()
     {
-        // TODO: Implement this part.
+        output->setTypeDescriptorContext(&typeDescriptorContext);
+        typeDescriptorContext.writeValueTypeLayoutsWith(output);
     }
 
     void writeClusterDescriptions()
@@ -895,7 +1171,7 @@ private:
     BinaryBlobBuilder binaryBlobBuilder;
     size_t objectCount;
     std::vector<SerializationClusterPtr> clusters;
-    std::unordered_map<std::string, SerializationClusterPtr> objectTypeNameToClusters;
+    std::unordered_map<TypeMapperPtr, SerializationClusterPtr> typeMapperToClustersMap;
 
     std::vector<ObjectMapperPtr> tracingStack;
     std::unordered_set<ObjectMapperPtr> seenSet;

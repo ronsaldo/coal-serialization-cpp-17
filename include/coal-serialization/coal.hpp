@@ -35,6 +35,7 @@
 #include <vector>
 #include <map>
 #include <set>
+#include <optional>
 #include <unordered_map>
 #include <unordered_set>
 #include <algorithm>
@@ -394,6 +395,68 @@ private:
 struct ReadStream
 {
     virtual ~ReadStream() {}
+
+    virtual bool readBytes(uint8_t *buffer, size_t size) = 0;
+
+    bool readUInt8(uint8_t &destination)
+    {
+        return readBytes(reinterpret_cast<uint8_t*> (&destination), 1);
+    }
+
+    bool readUInt16(uint16_t &destination)
+    {
+        return readBytes(reinterpret_cast<uint8_t*> (&destination), 2);
+    }
+
+    bool readUInt32(uint32_t &destination)
+    {
+        return readBytes(reinterpret_cast<uint8_t*> (&destination), 4);
+    }
+
+    bool readUInt64(uint64_t &destination)
+    {
+        return readBytes(reinterpret_cast<uint8_t*> (&destination), 8);
+    }
+
+    bool readInt8(int8_t &destination)
+    {
+        return readBytes(reinterpret_cast<uint8_t*> (&destination), 1);
+    }
+
+    bool readInt16(int16_t &destination)
+    {
+        return readBytes(reinterpret_cast<uint8_t*> (&destination), 2);
+    }
+
+    bool readInt32(int32_t &destination)
+    {
+        return readBytes(reinterpret_cast<uint8_t*> (&destination), 4);
+    }
+
+    bool readInt64(int64_t &destination)
+    {
+        return readBytes(reinterpret_cast<uint8_t*> (&destination), 8);
+    }
+
+    bool readFloat32(float &destination)
+    {
+        return readBytes(reinterpret_cast<uint8_t*> (&destination), 4);
+    }
+
+    bool readFloat64(double &destination)
+    {
+        return readBytes(reinterpret_cast<uint8_t*> (&destination), 8);
+    }
+
+    void setBinaryBlob(const uint8_t *data, uint32_t size)
+    {
+        binaryBlobData = data;
+        binaryBlobSize = size;
+    }
+
+private:
+    uint32_t binaryBlobSize;
+    const uint8_t *binaryBlobData;
 };
 
 /**
@@ -405,12 +468,37 @@ public:
     MemoryWriteStream(std::vector<uint8_t> &initialOutput)
         : output(initialOutput) {}
 
-    void writeBytes(const uint8_t *data, size_t size)
+    virtual void writeBytes(const uint8_t *data, size_t size) override
     {
         output.insert(output.end(), data, data + size);
     }
 private:
     std::vector<uint8_t> &output;
+};
+
+/**
+ * Memory read stream
+ */
+class MemoryReadStream : public ReadStream
+{
+public:
+    MemoryReadStream(const uint8_t *initialData, size_t initialDataSize)
+        : data(initialData), dataSize(initialDataSize) {}
+
+    virtual bool readBytes(uint8_t *buffer, size_t size) override
+    {
+        if(position + size > dataSize)
+            return false;
+
+        memcpy(buffer, data + position, size);
+        position += size;
+        return true;
+    }
+
+private:
+    size_t position = 0;
+    const uint8_t *data = nullptr;
+    size_t dataSize;
 };
 
 /**
@@ -911,7 +999,7 @@ public:
     RootValueBox(const VT &initialValue = VT())
         : value(initialValue) {}
 
-    virtual TypeMapperPtr getTypeMapper() const override
+    static TypeMapperPtr typeMapperSingleton()
     {
         static auto singleton = ObjectTypeMapper::makeWithFields("RootValueBox", nullptr, {
             FieldDescription{
@@ -921,6 +1009,24 @@ public:
             }
         });
         return singleton;
+    }
+
+    static ObjectMapperPtr makeFor(const ValueType &value)
+    {
+        return std::make_shared<ThisType> (value);
+    }
+
+    static std::optional<ValueType> unwrapDeserializedRootObjectOrValue(const ObjectMapperPtr &deserializedRootObject)
+    {
+        if(!deserializedRootObject)
+            return std::nullopt;
+
+        return std::static_pointer_cast<ThisType> (deserializedRootObject)->value;
+    }
+
+    virtual TypeMapperPtr getTypeMapper() const override
+    {
+        return typeMapperSingleton();
     }
 
     virtual void *getObjectBasePointer() override
@@ -945,61 +1051,97 @@ struct SerializableObjectClassTag {};
  * Makes an object mapper interface for the specified object.
  */
 template<typename T, typename C=void>
-struct ObjectMapperFor;
+struct ObjectMapperClassFor;
 
-template<typename T>
-struct RootValueBoxMapperFor
+template<>
+struct ObjectMapperClassFor<bool>
 {
-    static ObjectMapperPtr apply(const T &value)
-    {
-        return std::make_shared<RootValueBox<T>> (value);
-    }    
+    typedef RootValueBox<bool> type;
 };
 
 template<>
-struct ObjectMapperFor<bool> : RootValueBoxMapperFor<bool> {};
+struct ObjectMapperClassFor<uint8_t>
+{
+    typedef RootValueBox<uint8_t> type;
+};
 
 template<>
-struct ObjectMapperFor<uint8_t> : RootValueBoxMapperFor<uint8_t> {};
+struct ObjectMapperClassFor<uint16_t>
+{
+    typedef RootValueBox<uint16_t> type;
+};
 
 template<>
-struct ObjectMapperFor<uint16_t> : RootValueBoxMapperFor<uint16_t> {};
+struct ObjectMapperClassFor<uint32_t>
+{
+    typedef RootValueBox<uint32_t> type;
+};
 
 template<>
-struct ObjectMapperFor<uint32_t> : RootValueBoxMapperFor<uint32_t> {};
+struct ObjectMapperClassFor<uint64_t>
+{
+    typedef RootValueBox<uint64_t> type;
+};
 
 template<>
-struct ObjectMapperFor<uint64_t> : RootValueBoxMapperFor<uint64_t> {};
+struct ObjectMapperClassFor<int8_t>
+{
+    typedef RootValueBox<int8_t> type;
+};
 
 template<>
-struct ObjectMapperFor<int8_t> : RootValueBoxMapperFor<int8_t> {};
+struct ObjectMapperClassFor<int16_t>
+{
+    typedef RootValueBox<int16_t> type;
+};
 
 template<>
-struct ObjectMapperFor<int16_t> : RootValueBoxMapperFor<int16_t> {};
+struct ObjectMapperClassFor<int32_t>
+{
+    typedef RootValueBox<int32_t> type;
+};
 
 template<>
-struct ObjectMapperFor<int32_t> : RootValueBoxMapperFor<int32_t> {};
+struct ObjectMapperClassFor<int64_t>
+{
+    typedef RootValueBox<int64_t> type;
+};
 
 template<>
-struct ObjectMapperFor<int64_t> : RootValueBoxMapperFor<int64_t> {};
+struct ObjectMapperClassFor<char>
+{
+    typedef RootValueBox<char> type;
+};
 
 template<>
-struct ObjectMapperFor<char> : RootValueBoxMapperFor<char> {};
+struct ObjectMapperClassFor<char16_t>
+{
+    typedef RootValueBox<char16_t> type;
+};
 
 template<>
-struct ObjectMapperFor<char16_t> : RootValueBoxMapperFor<char16_t> {};
+struct ObjectMapperClassFor<char32_t>
+{
+    typedef RootValueBox<char32_t> type;
+};
 
 template<>
-struct ObjectMapperFor<char32_t> : RootValueBoxMapperFor<char32_t> {};
+struct ObjectMapperClassFor<float>
+{
+    typedef RootValueBox<float> type;
+};
 
 template<>
-struct ObjectMapperFor<float> : RootValueBoxMapperFor<float> {};
+struct ObjectMapperClassFor<double>
+{
+    typedef RootValueBox<double> type;
+};
 
 template<>
-struct ObjectMapperFor<double> : RootValueBoxMapperFor<double> {};
-
-template<>
-struct ObjectMapperFor<std::string> : RootValueBoxMapperFor<std::string> {};
+struct ObjectMapperClassFor<std::string>
+{
+    typedef RootValueBox<std::string> type;
+};
 
 /**
  * Serialization cluster
@@ -1059,7 +1201,7 @@ public:
     template<typename ROT>
     void serializeRootObjectOrValue(ROT &&root)
     {
-        serializeRootObject(ObjectMapperFor<ROT>::apply(root));
+        serializeRootObject(ObjectMapperClassFor<ROT>::type::makeFor(root));
     }
 
     void serializeRootObject(const ObjectMapperPtr &object)
@@ -1184,6 +1326,99 @@ private:
 class Deserializer
 {
 public:
+
+    Deserializer(ReadStream *initialInput)
+        : input(initialInput) {}
+
+    template<typename T>
+    std::optional<T> deserializeRootObjectOrValueOfType()
+    {
+        typedef typename ObjectMapperClassFor<T>::type RootObjectMapperClass;
+
+        auto result = deserializeRootObject(RootObjectMapperClass::typeMapperSingleton());
+        return RootObjectMapperClass::unwrapDeserializedRootObjectOrValue(result);
+    }
+
+    ObjectMapperPtr deserializeRootObject(const TypeMapperPtr &rootTypeMapper)
+    {
+        if(parseContent())
+            return nullptr;
+        return rootObject;
+    }
+
+private:
+    bool parseHeaderAndReadBlob()
+    {
+        uint32_t magicNumber;
+        uint8_t versionMajor, versionMinor;
+        uint16_t reserved;
+        uint32_t blobSize;
+
+        if(!input->readUInt32(magicNumber) || magicNumber != CoalMagicNumber)
+            return false;
+
+        if(!input->readUInt8(versionMajor) || versionMajor != CoalVersionMajor)
+            return false;
+
+        if(!input->readUInt8(versionMinor) || versionMinor != CoalVersionMinor)
+            return false;
+
+        if (!input->readUInt16(reserved) ||
+            !input->readUInt32(blobSize) ||
+            !input->readUInt32(valueTypeCount) ||
+            !input->readUInt32(clusterCount) ||
+            !input->readUInt32(objectCount))
+            return false;
+
+        blobData.resize(blobSize);
+        if(!input->readBytes(blobData.data(), blobSize))
+            return false;
+        input->setBinaryBlob(blobData.data(), blobSize);
+        
+        return true;
+    }
+
+    bool parseContent()
+    {
+        return parseHeaderAndReadBlob() &&
+            parseValueTypeDescriptors() &&
+            parseClusterDescriptors() &&
+            parseClusterInstances() &&
+            parseTrailer();
+    }
+
+    bool parseValueTypeDescriptors()
+    {
+        for(uint32_t i = 0; i < valueTypeCount; ++i)
+        {
+            // TODO: Parse the value type count.
+            return false;
+        }
+        return true;
+    }
+
+    bool parseClusterDescriptors()
+    {
+        return true;
+    }
+
+    bool parseClusterInstances()
+    {
+        return true;
+    }
+
+    bool parseTrailer()
+    {
+        return true;
+    }
+
+    ReadStream *input;
+    ObjectMapperPtr rootObject;
+    std::vector<uint8_t> blobData;
+
+    uint32_t valueTypeCount = 0;
+    uint32_t clusterCount = 0;
+    uint32_t objectCount = 0;
 };
 
 /**
@@ -1203,10 +1438,11 @@ std::vector<uint8_t> serialize(VT &&value)
  * Convenience method for deserializing Coal objects and values.
  */
 template<typename RT>
-RT deserialize(const std::vector<uint8_t> &data)
+std::optional<RT> deserialize(const std::vector<uint8_t> &data)
 {
-    (void)data;
-    return RT();
+    MemoryReadStream input(data.data(), data.size());
+    Deserializer deserializer(&input);
+    return deserializer.deserializeRootObjectOrValueOfType<RT> ();
 }
 
 } // End of namespace coal

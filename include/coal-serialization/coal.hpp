@@ -27,6 +27,8 @@
 #pragma once
 
 #include <cstdint>
+#include <cstring>
+#include <cassert>
 #include <memory>
 #include <array>
 #include <string>
@@ -35,6 +37,7 @@
 #include <set>
 #include <unordered_map>
 #include <unordered_set>
+#include <algorithm>
 
 #include <functional>
 #include <iostream>
@@ -137,33 +140,84 @@ class BinaryBlobBuilder
 public:
     std::vector<uint8_t> data;
 
-    size_t pushBytes(const uint8_t *bytes, size_t dataSize)
+    uint32_t getExistentForBytes(const uint8_t *bytes, size_t dataSize) const
     {
-        if(bytes == 0)
+        if(dataSize == 0)
             return 0;
         
-        // TODO: Use a proper hash table for this case.
-        auto result = data.size();
-        data.insert(data.end(), bytes, bytes + dataSize);
-        return result;
+        auto &bucket = hashTable[hashForBytes(bytes, dataSize) % HashTableCapacity];
+        for(auto [entryOffset, entrySize] : bucket)
+        {
+            if(entrySize != dataSize)
+                continue;
+
+            if(memcmp(&data[entryOffset], bytes, dataSize) == 0)
+                return entryOffset;
+        }
+
+        // Entry not found.
+        abort();
     }
 
-    size_t internString(const std::string &string)
+    void pushBytes(const uint8_t *bytes, size_t dataSize)
+    {
+        if(dataSize == 0)
+            return;
+        
+        auto &bucket = hashTable[hashForBytes(bytes, dataSize) % HashTableCapacity];
+        for(auto [entryOffset, entrySize] : bucket)
+        {
+            if(entrySize != dataSize)
+                continue;
+
+            if(memcmp(&data[entryOffset], bytes, dataSize) == 0)
+                return;
+        }
+
+        auto result = data.size();
+        data.insert(data.end(), bytes, bytes + dataSize);
+        bucket.push_back({result, dataSize});
+    }
+
+    void internString8(const std::string &string)
     {
         if(string.empty())
-            return 0;
+            return;
 
-        auto it = internedStrings.find(string);
-        if(it != internedStrings.end())
-            return it->second;
-        
-        auto result = pushBytes(reinterpret_cast<const uint8_t*> (string.data()), string.size());
-        internedStrings[string] = result;
-        return result;
+        return pushBytes(reinterpret_cast<const uint8_t*> (string.data()), std::min(string.size(), size_t(0xFF)));
+    }
+
+    void internString16(const std::string &string)
+    {
+        if(string.empty())
+            return;
+
+        pushBytes(reinterpret_cast<const uint8_t*> (string.data()), std::min(string.size(), size_t(0xFFFF)));
+    }
+
+    void internString32(const std::string &string)
+    {
+        if(string.empty())
+            return;
+
+        pushBytes(reinterpret_cast<const uint8_t*> (string.data()), std::min(string.size(), size_t(0xFFFFFFFF)));
     }
 
 private:
-    std::unordered_map<std::string, size_t> internedStrings;
+    static constexpr size_t HashTableCapacity = 4096;
+    static uint32_t hashForBytes(const uint8_t *bytes, size_t dataSize)
+    {
+        // FIXME: Use a better hash function.
+        uint32_t result = 0;
+        for(size_t i = 0; i < dataSize; ++i)
+        {
+            result = result*33 + bytes[i];
+        }
+
+        return result;
+    }
+
+    std::vector<std::pair<size_t, size_t>> hashTable[HashTableCapacity];
 };
 
 /**
@@ -232,6 +286,30 @@ public:
         writeBytes(blob->data.data(), blob->data.size());
     }
 
+    void writeUTF8_32_8(const std::string &string)
+    {
+        assert(blob);
+        auto dataSize = uint8_t(std::min(string.size(), size_t(0xFF)));
+        writeUInt32(blob->getExistentForBytes(reinterpret_cast<const uint8_t*> (string.data()), dataSize));
+        writeUInt8(dataSize);
+    }
+
+    void writeUTF8_32_16(const std::string &string)
+    {
+        assert(blob);
+        auto dataSize = uint16_t(std::min(string.size(), size_t(0xFFFF)));
+        writeUInt32(blob->getExistentForBytes(reinterpret_cast<const uint8_t*> (string.data()), dataSize));
+        writeUInt16(dataSize);
+    }
+
+    void writeUTF8_32_32(const std::string &string)
+    {
+        assert(blob);
+        auto dataSize = uint32_t(std::min(string.size(), size_t(0xFFFFFFFF)));
+        writeUInt32(blob->getExistentForBytes(reinterpret_cast<const uint8_t*> (string.data()), dataSize));
+        writeUInt32(dataSize);
+    }
+
 private:
     const BinaryBlobBuilder *blob = nullptr;
 };
@@ -269,6 +347,11 @@ class TypeDescriptor
 public:
     virtual ~TypeDescriptor() {}
 
+    virtual void writeDescriptionWith(WriteStream *output)
+    {
+        output->writeUInt8(uint8_t(kind));
+    }
+
     TypeDescriptorKind kind;
 };
 
@@ -278,6 +361,13 @@ public:
 class StructTypeDescriptor : public TypeDescriptor
 {
 public:
+    virtual void writeDescriptionWith(WriteStream *output) override
+    {
+        (void)output;
+        assert("TODO: StructTypeDescriptor " && false);
+        abort();
+    }
+
     StructTypePtr structure;
 };
 
@@ -287,6 +377,14 @@ public:
 class FixedArrayTypeDescriptor : public TypeDescriptor
 {
 public:
+
+    virtual void writeDescriptionWith(WriteStream *output) override
+    {
+        output->writeUInt8(uint8_t(kind));
+        output->writeUInt32(size);
+        element->writeDescriptionWith(output);
+    }
+
     uint32_t size;
     TypeDescriptorPtr element;
 };
@@ -297,6 +395,12 @@ public:
 class ArrayTypeDescriptor : public TypeDescriptor
 {
 public:
+    virtual void writeDescriptionWith(WriteStream *output) override
+    {
+        output->writeUInt8(uint8_t(kind));
+        element->writeDescriptionWith(output);
+    }
+
     TypeDescriptorPtr element;
 };
 
@@ -306,6 +410,12 @@ public:
 class SetTypeDescriptor : public TypeDescriptor
 {
 public:
+    virtual void writeDescriptionWith(WriteStream *output) override
+    {
+        output->writeUInt8(uint8_t(kind));
+        element->writeDescriptionWith(output);
+    }
+
     TypeDescriptorPtr element;
 };
 
@@ -315,6 +425,13 @@ public:
 class MapTypeDescriptor : public TypeDescriptor
 {
 public:
+    virtual void writeDescriptionWith(WriteStream *output) override
+    {
+        output->writeUInt8(uint8_t(kind));
+        key->writeDescriptionWith(output);
+        value->writeDescriptionWith(output);
+    }
+
     TypeDescriptorPtr key;
     TypeDescriptorPtr value;
 };
@@ -422,9 +539,15 @@ struct FieldDescriptor
     TypeDescriptorPtr typeDescriptor;
     FieldAccessorPtr fieldAccessor;
 
-    void pushDataIntoBinaryBlob(BinaryBlobBuilder &binaryBlobBuilder)
+    void pushDataIntoBinaryBlob(BinaryBlobBuilder &binaryBlobBuilder) const
     {
-        binaryBlobBuilder.internString(name);
+        binaryBlobBuilder.internString16(name);
+    }
+
+    void writeDescriptionWith(WriteStream *output) const
+    {
+        output->writeUTF8_32_16(name);
+        typeDescriptor->writeDescriptionWith(output);
     }
 };
 
@@ -441,6 +564,7 @@ public:
 
     virtual std::string getObjectTypeName() const = 0;
     virtual void fieldDescriptorsDo(TypeDescriptorContext *typeDescriptorContext, const FieldDescriptorIterationBlock &aBlock) = 0;
+    virtual void *getObjectBasePointer() = 0;
 };
 
 /**
@@ -450,6 +574,8 @@ class FieldAccessor
 {
 public:
     virtual ~FieldAccessor() {}
+
+    virtual void *getPointerForBasePointer(void *basePointer) = 0;
 };
 
 /**
@@ -465,6 +591,12 @@ public:
 
     MemberFieldAccessor(MemberPointerType initialMemberPointer)
         : memberPointer(initialMemberPointer) {}
+
+    void *getPointerForBasePointer(void *basePointer) override
+    {
+        auto self = reinterpret_cast<ClassType*> (basePointer);
+        return reinterpret_cast<void*> (&((*self).*memberPointer));
+    }
 
     MemberPointerType memberPointer;
 };
@@ -488,18 +620,23 @@ public:
     ValueBoxObject(const VT &initialValue = VT())
         : value(initialValue) {}
 
-    std::string getObjectTypeName() const override
+    virtual std::string getObjectTypeName() const override
     {
         return "ValueBox";
     }
 
-    void fieldDescriptorsDo(TypeDescriptorContext *typeDescriptorContext, const FieldDescriptorIterationBlock &aBlock) override
+    virtual void fieldDescriptorsDo(TypeDescriptorContext *typeDescriptorContext, const FieldDescriptorIterationBlock &aBlock) override
     {
         aBlock(FieldDescriptor{
             "value",
             typeDescriptorContext->getForType<VT> (),
             memberFieldAccessorFor(&ThisType::value)
         });
+    }
+
+    virtual void *getObjectBasePointer() override
+    {
+        return reinterpret_cast<void*> (this);
     }
 
     VT value;
@@ -584,13 +721,17 @@ public:
     std::string name;
     std::vector<ObjectMapperPtr> instances;
     std::vector<FieldDescriptor> fieldDescriptors;
+    std::vector<size_t> blobFieldDescriptors;
     std::vector<size_t> objectFieldDescriptors;
 
     void pushDataIntoBinaryBlob(BinaryBlobBuilder &binaryBlobBuilder)
     {
-        binaryBlobBuilder.internString(name);
+        binaryBlobBuilder.internString16(name);
         for(auto &descriptor : fieldDescriptors)
             descriptor.pushDataIntoBinaryBlob(binaryBlobBuilder);
+
+        if(blobFieldDescriptors.empty())
+            return;
     }
 
     void addFieldDescriptor(const FieldDescriptor &descriptor)
@@ -601,6 +742,28 @@ public:
     void addObject(const ObjectMapperPtr &object)
     {
         instances.push_back(object);
+    }
+
+    void writeDescriptionWith(WriteStream *output)
+    {
+        output->writeUTF8_32_16(name);
+        output->writeUInt16(fieldDescriptors.size());
+        output->writeUInt32(instances.size());
+        for(const auto &field : fieldDescriptors)
+            field.writeDescriptionWith(output);
+    }
+
+    void writeInstancesWith(WriteStream *output)
+    {
+        for(const auto &instance : instances)
+        {
+            auto basePointer = instance->getObjectBasePointer();
+            for(const auto &field : fieldDescriptors)
+            {
+                auto fieldPointer = field.fieldAccessor->getPointerForBasePointer(basePointer);
+                std::cout << "TODO: Write field at: " << fieldPointer << std::endl;
+            }  
+        }
     }
 };
 
@@ -699,14 +862,19 @@ private:
 
     void writeValueTypeLayouts()
     {
+        // TODO: Implement this part.
     }
 
     void writeClusterDescriptions()
     {
+        for(auto &cluster : clusters)
+            cluster->writeDescriptionWith(output);
     }
 
     void writeClusterInstances()
     {
+        for(auto &cluster : clusters)
+            cluster->writeInstancesWith(output);
     }
 
     void prepareForWriting()

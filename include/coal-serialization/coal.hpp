@@ -805,7 +805,8 @@ struct MaterializationFieldDescription
 {
     std::string name;
     TypeDescriptorPtr encoding;
-    AggregateFieldDescription *targetField = nullptr;;
+    AggregateFieldDescription *targetField = nullptr;
+    TypeMapperPtr targetTypeMapper;
 
     bool readDescriptionWith(ReadStream *input)
     {
@@ -856,6 +857,12 @@ public:
         return 0;
     }
 
+    virtual AggregateFieldDescription *getFieldNamed(const std::string &fieldName)
+    {
+        (void)fieldName;
+        return nullptr;
+    }
+
     virtual void writeAggregateFieldDescriptionsWith(WriteStream *output) const
     {
         (void)output;
@@ -874,6 +881,12 @@ public:
         (void)fieldPointer;
         (void)output;
         abort();
+    }
+
+    virtual bool canReadFieldWithTypeDescriptor(const TypeDescriptorPtr &encoding) const
+    {
+        (void)encoding;
+        return false;
     }
 
     virtual bool readInstanceWith(void *basePointer, ReadStream *input)
@@ -1060,6 +1073,12 @@ public:
         return uint16_t(fields.size());
     }
 
+    virtual AggregateFieldDescription *getFieldNamed(const std::string &name) override
+    {
+        auto it = fieldNameMap.find(name);
+        return it != fieldNameMap.end() ? &fields[it->second] : nullptr;
+    }
+
     virtual void writeAggregateFieldDescriptionsWith(WriteStream *output) const override
     {
         for(auto &field : fields)
@@ -1075,7 +1094,6 @@ public:
         }
     }
     std::string name;
-    std::vector<AggregateFieldDescription> fields;
 
     void materializationTypeMapperDependenciesDo(const TypeMapperIterationBlock &aBlock) override
     {
@@ -1086,6 +1104,22 @@ public:
                 fieldTypeMapper->withMaterializationTypeMapperDependenciesDo(aBlock);
         }
     }
+
+protected:
+
+    void addFields(const std::vector<AggregateFieldDescription> &newFields)
+    {
+        fields.reserve(newFields.size());
+        for(auto &field : newFields)
+        {
+            fieldNameMap.insert({field.name, fields.size()});
+            fields.push_back(field);
+        }
+    }
+
+    std::vector<AggregateFieldDescription> fields;
+    std::unordered_map<std::string, size_t> fieldNameMap;
+
 };
 
 typedef std::function<ObjectMapperPtr ()> ObjectMapperFactory;
@@ -1113,7 +1147,7 @@ public:
         auto result = std::make_shared<ObjectTypeMapper> ();
         result->name = name;
         result->superType = superType;
-        result->fields = fields;
+        result->addFields(fields);
         result->factory = factory;
         return result;
     }
@@ -1213,7 +1247,26 @@ public:
         // Set the resolved type. 
         resolvedType = newResolveType;
 
-        // TODO: Attempt to match the different properties.
+        // Attempt to match the different fields.
+        for(auto &serializedField : fields)
+        {
+            // Fetch the target field.
+            auto targetField = resolvedType->getFieldNamed(serializedField.name);
+            if(!targetField)
+                continue;
+
+            // Fetch the target type mapper.
+            auto targetFieldTypeMapper = targetField->typeMapper.lock();
+            if(!targetFieldTypeMapper)
+                continue;
+
+            // Check that the target type mapper can read the target field.
+            if(!targetFieldTypeMapper->canReadFieldWithTypeDescriptor(serializedField.encoding))
+                continue;
+
+            serializedField.targetField = targetField;
+            serializedField.targetTypeMapper = targetFieldTypeMapper;
+        }
     }
 
 };
@@ -1254,20 +1307,10 @@ public:
 
         for(auto &field : fields)
         {
-            if(field.targetField)
+            if(field.targetField && field.targetTypeMapper)
             {
-                auto targetField = field.targetField;
-                auto targetFieldTypeMapper = targetField->typeMapper.lock();
-                if(targetFieldTypeMapper)
-                {
-                    auto targetFieldPointer = targetField->accessor->getPointerForBasePointer(basePointer);
-                    targetFieldTypeMapper->readFieldWith(targetFieldPointer, field.encoding, input);
-                }
-                else
-                {
-                    if(!field.encoding->skipDataWith(input))
-                        return false;
-                }
+                auto targetFieldPointer = field.targetField->accessor->getPointerForBasePointer(basePointer);
+                field.targetTypeMapper->readFieldWith(targetFieldPointer, field.encoding, input);
             }
             else
             {
@@ -1324,6 +1367,167 @@ public:
     {
         output->writeBytes(reinterpret_cast<const uint8_t*> (fieldPointer), sizeof(FieldType));
     }
+
+    virtual bool canReadFieldWithTypeDescriptor(const TypeDescriptorPtr &encoding) const
+    {
+        switch(encoding->kind)
+        {
+        case TypeDescriptorKind::Boolean8:
+        case TypeDescriptorKind::Boolean16:
+        case TypeDescriptorKind::Boolean32:
+        case TypeDescriptorKind::Boolean64:
+        case TypeDescriptorKind::UInt8:
+        case TypeDescriptorKind::UInt16:
+        case TypeDescriptorKind::UInt32:
+        case TypeDescriptorKind::UInt64:
+        case TypeDescriptorKind::UInt128:
+        case TypeDescriptorKind::Int8:
+        case TypeDescriptorKind::Int16:
+        case TypeDescriptorKind::Int32:
+        case TypeDescriptorKind::Int64:
+        case TypeDescriptorKind::Int128:
+        case TypeDescriptorKind::Float32:
+        case TypeDescriptorKind::Float64:
+        case TypeDescriptorKind::Char8:
+        case TypeDescriptorKind::Char16:
+        case TypeDescriptorKind::Char32:
+                return true;
+
+        default:
+            return false;
+        }
+    }
+
+    virtual bool readFieldWith(void *fieldPointer, const TypeDescriptorPtr &fieldEncoding, ReadStream *input)
+    {
+        auto destination = reinterpret_cast<FieldType*> (fieldPointer);
+
+        switch(fieldEncoding->kind)
+        {
+        case TypeDescriptorKind::Boolean8:
+        case TypeDescriptorKind::UInt8:
+        case TypeDescriptorKind::Char8:
+            {
+                uint8_t readedValue = 0;
+                if(!input->readUInt8(readedValue))
+                    return false;
+                *destination = FieldType(readedValue);
+                return true;
+            }
+
+        case TypeDescriptorKind::Boolean16:
+        case TypeDescriptorKind::UInt16:
+        case TypeDescriptorKind::Char16:
+            {
+                uint16_t readedValue = 0;
+                if(!input->readUInt16(readedValue))
+                    return false;
+                *destination = FieldType(readedValue);
+                return true;
+            }
+
+        case TypeDescriptorKind::Boolean32:
+        case TypeDescriptorKind::UInt32:
+        case TypeDescriptorKind::Char32:
+            {
+                uint32_t readedValue = 0;
+                if(!input->readUInt32(readedValue))
+                    return false;
+                *destination = FieldType(readedValue);
+                return true;
+            }
+
+        case TypeDescriptorKind::Boolean64:
+        case TypeDescriptorKind::UInt64:
+            {
+                uint64_t readedValue = 0;
+                if(!input->readUInt64(readedValue))
+                    return false;
+                *destination = FieldType(readedValue);
+                return true;
+            }
+
+        case TypeDescriptorKind::UInt128:
+            {
+                uint64_t readedLow = 0;
+                uint64_t readedHigh = 0;
+                if(!input->readUInt64(readedLow) || !input->readUInt64(readedHigh))
+                    return false;
+
+                *destination = FieldType(readedLow);
+                return true;
+            }
+
+        case TypeDescriptorKind::Int8:
+            {
+                int8_t readedValue = 0;
+                if(!input->readInt8(readedValue))
+                    return false;
+                *destination = FieldType(readedValue);
+                return true;
+            }
+
+        case TypeDescriptorKind::Int16:
+            {
+                int16_t readedValue = 0;
+                if(!input->readInt16(readedValue))
+                    return false;
+                *destination = FieldType(readedValue);
+                return true;
+            }
+
+        case TypeDescriptorKind::Int32:
+            {
+                int32_t readedValue = 0;
+                if(!input->readInt32(readedValue))
+                    return false;
+                *destination = FieldType(readedValue);
+                return true;
+            }
+
+        case TypeDescriptorKind::Int64:
+            {
+                int64_t readedValue = 0;
+                if(!input->readInt64(readedValue))
+                    return false;
+                *destination = FieldType(readedValue);
+                return true;
+            }
+
+        case TypeDescriptorKind::Int128:
+            {
+                int64_t readedLow = 0;
+                int64_t readedHigh = 0;
+                if(!input->readInt64(readedLow) || !input->readInt64(readedHigh))
+                    return false;
+
+                *destination = FieldType(readedLow);
+                return true;
+            }
+
+        case TypeDescriptorKind::Float32:
+            {
+                float readedValue = 0;
+                if(!input->readFloat32(readedValue))
+                    return false;
+                *destination = FieldType(readedValue);
+                return true;
+            }
+
+        case TypeDescriptorKind::Float64:
+            {
+                double readedValue = 0;
+                if(!input->readFloat64(readedValue))
+                    return false;
+                *destination = FieldType(readedValue);
+                return true;
+            }
+
+        default:
+            return false;
+        }
+    }
+
 
     TypeDescriptorPtr getOrCreateTypeDescriptor(TypeDescriptorContext *context)
     {

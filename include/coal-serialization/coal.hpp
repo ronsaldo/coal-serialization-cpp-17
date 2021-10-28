@@ -39,6 +39,7 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <algorithm>
+#include <mutex>
 
 #include <functional>
 #include <iostream>
@@ -58,6 +59,10 @@ class TypeDescriptorContext;
 class TypeMapper;
 typedef std::shared_ptr<TypeMapper> TypeMapperPtr;
 typedef std::weak_ptr<TypeMapper> TypeMapperWeakPtr;
+
+class TypeMapperRegistry;
+typedef std::shared_ptr<TypeMapperRegistry> TypeMapperRegistryPtr;
+typedef std::weak_ptr<TypeMapperRegistry> TypeMapperRegistryWeakPtr;
 
 class ObjectMaterializationTypeMapper;
 typedef std::shared_ptr<ObjectMaterializationTypeMapper> ObjectMaterializationTypeMapperPtr;
@@ -808,16 +813,23 @@ struct MaterializationFieldDescription
     }
 };
 
+typedef std::function<void (const TypeMapperPtr &)> TypeMapperIterationBlock;
+
 /**
  * Type mapper interface.
  * I am an interface used for describing and serializing the contents of specific types.
  */
-class TypeMapper
+class TypeMapper : public std::enable_shared_from_this<TypeMapper>
 {
 public:
     virtual ~TypeMapper() {};
 
     virtual bool isMaterializationAdaptationType() const
+    {
+        return false;
+    }
+
+    virtual bool isMaterializationDependencyType() const
     {
         return false;
     }
@@ -897,6 +909,19 @@ public:
     }
 
     virtual TypeDescriptorPtr getOrCreateTypeDescriptor(TypeDescriptorContext *context) = 0;
+
+    virtual void materializationTypeMapperDependenciesDo(const TypeMapperIterationBlock &aBlock)
+    {
+        (void)aBlock;
+    }
+
+
+    virtual void withMaterializationTypeMapperDependenciesDo(const TypeMapperIterationBlock &aBlock)
+    {
+        if(isMaterializationDependencyType())
+            aBlock(shared_from_this());
+        materializationTypeMapperDependenciesDo(aBlock);
+    }
 };
 
 inline TypeDescriptorPtr TypeDescriptorContext::getForTypeMapper(const TypeMapperPtr &mapper)
@@ -908,6 +933,74 @@ inline TypeDescriptorPtr TypeDescriptorContext::getForTypeMapper(const TypeMappe
     auto descriptor = mapper->getOrCreateTypeDescriptor(this);
     mapperToDescriptorMap.insert({mapper, descriptor});
     return descriptor;
+}
+/**
+ * Type mapper registry interface.
+ * I am an interface used for looking up type mappers by name. I am typically used for customizing the materialization process
+ */
+class TypeMapperRegistry
+{
+public:
+    virtual ~TypeMapperRegistry() {}
+
+    virtual TypeMapperPtr getTypeMapperWithName(const std::string &name)
+    {
+        (void)name;
+        return nullptr;
+    }
+
+    static TypeMapperRegistryPtr getOrCreateForTransitiveClosureOf(const TypeMapperPtr &rootTypeMapper);
+};
+
+/**
+ * Transitive closure type mapper registry
+ * I am a type mapper registry that is built by using the transitive closure that starts with some specified types.
+ */
+class TransitiveClosureTypeMapperRegistry : public TypeMapperRegistry
+{
+public:
+   
+    virtual TypeMapperPtr getTypeMapperWithName(const std::string &name)
+    {
+        auto it = nameMap.find(name);
+        return it != nameMap.end() ? it->second : nullptr;
+    }
+
+    void addWithDependencies(const TypeMapperPtr &typeMapper)
+    {
+        if(!typeMapper)
+            return;
+
+        if(addedTypes.find(typeMapper) != addedTypes.end())
+            return;
+
+        addedTypes.insert(typeMapper);
+        nameMap.insert({typeMapper->getName(), typeMapper});
+        typeMapper->materializationTypeMapperDependenciesDo([&](const TypeMapperPtr &dependency) {
+            addWithDependencies(dependency);
+        });
+    }
+
+private:
+    std::unordered_set<TypeMapperPtr> addedTypes;
+    std::unordered_map<std::string, TypeMapperPtr> nameMap;
+};
+
+inline TypeMapperRegistryPtr TypeMapperRegistry::getOrCreateForTransitiveClosureOf(const TypeMapperPtr &rootTypeMapper)
+{
+    static std::unordered_map<TypeMapperPtr, TypeMapperRegistryPtr> cachedRegistries;
+    static std::mutex cachedRegistriesMutex;
+
+    std::unique_lock<std::mutex> l(cachedRegistriesMutex);
+
+    auto it = cachedRegistries.find(rootTypeMapper);
+    if(it != cachedRegistries.end())
+        return it->second;
+
+    auto transitiveClosureRegistry = std::make_shared<TransitiveClosureTypeMapperRegistry> ();
+    transitiveClosureRegistry->addWithDependencies(rootTypeMapper);
+    cachedRegistries.insert({rootTypeMapper, transitiveClosureRegistry});
+    return transitiveClosureRegistry;
 }
 
 /**
@@ -945,6 +1038,11 @@ class AggregateTypeMapper : public TypeMapper
 {
 public:
 
+    virtual bool isMaterializationDependencyType() const override
+    {
+        return true;
+    }
+
     virtual const std::string &getName() const override
     {
         return name;
@@ -978,7 +1076,19 @@ public:
     }
     std::string name;
     std::vector<AggregateFieldDescription> fields;
+
+    void materializationTypeMapperDependenciesDo(const TypeMapperIterationBlock &aBlock) override
+    {
+        for(auto &field : fields)
+        {
+            auto fieldTypeMapper = field.typeMapper.lock();
+            if(fieldTypeMapper)
+                fieldTypeMapper->withMaterializationTypeMapperDependenciesDo(aBlock);
+        }
+    }
 };
+
+typedef std::function<ObjectMapperPtr ()> ObjectMapperFactory;
 
 /**
  * Structure type mapper
@@ -993,12 +1103,18 @@ public:
         return true;
     }
 
-    static TypeMapperPtr makeWithFields(const std::string &name, const TypeMapperPtr &superType, const std::vector<AggregateFieldDescription> &fields)
+    virtual ObjectMapperPtr makeInstance() override
+    {
+        return factory();
+    }
+
+    static TypeMapperPtr makeWithFields(const std::string &name, const TypeMapperPtr &superType, const ObjectMapperFactory &factory, const std::vector<AggregateFieldDescription> &fields)
     {
         auto result = std::make_shared<ObjectTypeMapper> ();
         result->name = name;
         result->superType = superType;
         result->fields = fields;
+        result->factory = factory;
         return result;
     }
 
@@ -1013,7 +1129,16 @@ public:
         abort();
     }
 
+    void materializationTypeMapperDependenciesDo(const TypeMapperIterationBlock &aBlock)
+    {
+        auto st = superType.lock();
+        if(st)
+            st->withMaterializationTypeMapperDependenciesDo(aBlock);
+        AggregateTypeMapper::materializationTypeMapperDependenciesDo(aBlock);
+    }
+
     TypeMapperWeakPtr superType;
+    ObjectMapperFactory factory;
 };
 
 /**
@@ -1075,6 +1200,22 @@ public:
     {
         abort();
     }
+
+    void resolveTypeUsing(const TypeMapperPtr &newResolveType)
+    {
+        if(!newResolveType)
+            return;
+
+        // Match the type kind.
+        if(newResolveType->isObjectType() != isObjectType())
+            return;
+
+        // Set the resolved type. 
+        resolvedType = newResolveType;
+
+        // TODO: Attempt to match the different properties.
+    }
+
 };
 
 /**
@@ -1092,7 +1233,12 @@ class ObjectMaterializationTypeMapper : public MaterializationTypeMapper
 {
 public:
 
-    virtual ObjectMapperPtr makeInstance()
+    virtual bool isObjectType() const
+    {
+        return true;
+    }
+
+    virtual ObjectMapperPtr makeInstance() override
     {
         return resolvedType ? resolvedType->makeInstance() : nullptr;
     }
@@ -1305,7 +1451,11 @@ public:
 
     static TypeMapperPtr typeMapperSingleton()
     {
-        static auto singleton = ObjectTypeMapper::makeWithFields("RootValueBox", nullptr, {
+        static auto singleton = ObjectTypeMapper::makeWithFields("RootValueBox", nullptr, 
+            []() {
+                return std::make_shared<ThisType> ();
+            },
+            {
             AggregateFieldDescription{
                 "value",
                 typeMapperForType<ValueType> (),
@@ -1650,7 +1800,10 @@ public:
 
     ObjectMapperPtr deserializeRootObject(const TypeMapperPtr &rootTypeMapper)
     {
-        if(parseContent())
+        if(!typeMapperRegistry)
+            typeMapperRegistry = TypeMapperRegistry::getOrCreateForTransitiveClosureOf(rootTypeMapper);
+
+        if(!parseContent())
             return nullptr;
         return rootObject;
     }
@@ -1753,6 +1906,9 @@ private:
 
     bool validateAndResolveTypes()
     {
+        for(auto &type : clusterTypes)
+            type->resolveTypeUsing(typeMapperRegistry->getTypeMapperWithName(type->getName()));
+
         return true;
     }
 
@@ -1804,6 +1960,7 @@ private:
 
     ReadStream *input;
     ObjectMapperPtr rootObject;
+    TypeMapperRegistryPtr typeMapperRegistry;
     std::vector<uint8_t> blobData;
     TypeDescriptorContext typeDescriptorContext;
 

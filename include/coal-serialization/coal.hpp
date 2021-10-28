@@ -50,9 +50,6 @@ static constexpr uint32_t CoalMagicNumber = 0x4C414F43;
 static constexpr uint8_t CoalVersionMajor = 1;
 static constexpr uint8_t CoalVersionMinor = 0;
 
-class StructType;
-typedef std::shared_ptr<StructType> StructTypePtr;
-
 class TypeDescriptor;
 typedef std::shared_ptr<TypeDescriptor> TypeDescriptorPtr;
 
@@ -61,6 +58,10 @@ class TypeDescriptorContext;
 class TypeMapper;
 typedef std::shared_ptr<TypeMapper> TypeMapperPtr;
 typedef std::weak_ptr<TypeMapper> TypeMapperWeakPtr;
+
+class ObjectMaterializationTypeMapper;
+typedef std::shared_ptr<ObjectMaterializationTypeMapper> ObjectMaterializationTypeMapperPtr;
+typedef std::weak_ptr<ObjectMaterializationTypeMapper> ObjectMaterializationTypeMapperWeakPtr;
 
 class ObjectMapper;
 typedef std::shared_ptr<ObjectMapper> ObjectMapperPtr;
@@ -397,6 +398,7 @@ struct ReadStream
     virtual ~ReadStream() {}
 
     virtual bool readBytes(uint8_t *buffer, size_t size) = 0;
+    virtual bool skipBytes(size_t size) = 0;
 
     bool readUInt8(uint8_t &destination)
     {
@@ -448,15 +450,59 @@ struct ReadStream
         return readBytes(reinterpret_cast<uint8_t*> (&destination), 8);
     }
 
-    void setBinaryBlob(const uint8_t *data, uint32_t size)
+    bool readUTF8_32_8(std::string &output)
+    {
+        uint32_t offset = 0;
+        uint8_t size = 0;
+        if(!readUInt32(offset) || !readUInt8(size) || offset + size > binaryBlobSize)
+            return false;
+
+        output.resize(size);
+        memcpy(output.data(), binaryBlobData + offset, size);
+        return true;
+    }
+
+    bool readUTF8_32_16(std::string &output)
+    {
+        uint32_t offset = 0;
+        uint16_t size = 0;
+        if(!readUInt32(offset) || !readUInt16(size) || offset + size > binaryBlobSize)
+            return false;
+
+        output.resize(size);
+        memcpy(output.data(), binaryBlobData + offset, size);
+        return true;
+    }
+
+    bool readUTF8_32_32(std::string &output)
+    {
+        uint32_t offset = 0;
+        uint32_t size = 0;
+        if(!readUInt32(offset) || !readUInt32(size) || offset + size > binaryBlobSize)
+            return false;
+
+        output.resize(size);
+        memcpy(output.data(), binaryBlobData + offset, size);
+        return true;
+    }
+
+    bool readTypeDescriptor(TypeDescriptorPtr &typeDescriptor);
+
+    void setTypeDescriptorContext(TypeDescriptorContext *context)
+    {
+        typeDescriptorContext = context;
+    }
+
+    void setBinaryBlob(const uint8_t *data, size_t size)
     {
         binaryBlobData = data;
         binaryBlobSize = size;
     }
 
 private:
-    uint32_t binaryBlobSize;
+    size_t binaryBlobSize;
     const uint8_t *binaryBlobData;
+    TypeDescriptorContext *typeDescriptorContext = nullptr;
 };
 
 /**
@@ -495,6 +541,15 @@ public:
         return true;
     }
 
+    virtual bool skipBytes(size_t size) override
+    {
+        if(position + size > dataSize)
+            return false;
+
+        position += size;
+        return true;
+    }
+
 private:
     size_t position = 0;
     const uint8_t *data = nullptr;
@@ -514,6 +569,55 @@ public:
         output->writeUInt8(uint8_t(kind));
     }
 
+    virtual bool skipDataWith(ReadStream *input)
+    {
+        switch(kind)
+        {
+        case TypeDescriptorKind::Object: return input->skipBytes(4);
+        case TypeDescriptorKind::Boolean8: return input->skipBytes(1);
+        case TypeDescriptorKind::Boolean16: return input->skipBytes(2);
+        case TypeDescriptorKind::Boolean32: return input->skipBytes(4);
+        case TypeDescriptorKind::Boolean64: return input->skipBytes(8);
+        case TypeDescriptorKind::UInt8: return input->skipBytes(1);
+        case TypeDescriptorKind::UInt16: return input->skipBytes(2);
+        case TypeDescriptorKind::UInt32: return input->skipBytes(4);
+        case TypeDescriptorKind::UInt64: return input->skipBytes(8);
+        case TypeDescriptorKind::UInt128: return input->skipBytes(16);
+        case TypeDescriptorKind::Int8: return input->skipBytes(1);
+        case TypeDescriptorKind::Int16: return input->skipBytes(2);
+        case TypeDescriptorKind::Int32: return input->skipBytes(4);
+        case TypeDescriptorKind::Int64: return input->skipBytes(8);
+        case TypeDescriptorKind::Int128: return input->skipBytes(16);
+        case TypeDescriptorKind::Float16: return input->skipBytes(2);
+        case TypeDescriptorKind::Float32: return input->skipBytes(4);
+        case TypeDescriptorKind::Float64: return input->skipBytes(8);
+        case TypeDescriptorKind::Float128: return input->skipBytes(16);
+        case TypeDescriptorKind::Float256: return input->skipBytes(32);
+        case TypeDescriptorKind::Decimal32: return input->skipBytes(4);
+        case TypeDescriptorKind::Decimal64: return input->skipBytes(8);
+        case TypeDescriptorKind::Decimal128: return input->skipBytes(16);
+        case TypeDescriptorKind::Binary_32_8: return input->skipBytes(5);
+        case TypeDescriptorKind::Binary_32_16: return input->skipBytes(6);
+        case TypeDescriptorKind::Binary_32_32: return input->skipBytes(8);
+        case TypeDescriptorKind::UTF8_32_8: return input->skipBytes(5);
+        case TypeDescriptorKind::UTF8_32_16: return input->skipBytes(6);
+        case TypeDescriptorKind::UTF8_32_32: return input->skipBytes(8);
+        case TypeDescriptorKind::UTF16_32_8: return input->skipBytes(5);
+        case TypeDescriptorKind::UTF16_32_16: return input->skipBytes(6);
+        case TypeDescriptorKind::UTF16_32_32: return input->skipBytes(8);
+        case TypeDescriptorKind::UTF32_32_8: return input->skipBytes(5);
+        case TypeDescriptorKind::UTF32_32_16: return input->skipBytes(6);
+        case TypeDescriptorKind::UTF32_32_32: return input->skipBytes(8);
+        case TypeDescriptorKind::BigInt_32_8: return input->skipBytes(5);
+        case TypeDescriptorKind::BigInt_32_16: return input->skipBytes(6);
+        case TypeDescriptorKind::BigInt_32_32: return input->skipBytes(8);
+        case TypeDescriptorKind::Char8: return input->skipBytes(1);
+        case TypeDescriptorKind::Char16: return input->skipBytes(2);
+        case TypeDescriptorKind::Char32: return input->skipBytes(4);
+        default: return false;
+        }
+    }
+
     TypeDescriptorKind kind;
 };
 
@@ -530,7 +634,7 @@ public:
         abort();
     }
 
-    StructTypePtr structure;
+    TypeMapperPtr typeMapper;
 };
 
 /**
@@ -629,6 +733,28 @@ public:
         // TODO: Implement this part
     }
 
+    bool readTypeDescriptorWith(TypeDescriptorPtr &descriptor, ReadStream *input)
+    {
+        uint8_t kindByte = 0;
+        if(!input->readUInt8(kindByte))
+            return false;
+
+        // Is this a single byte primitive type descriptor?
+        auto kind = TypeDescriptorKind(kindByte);
+        if(kindByte < uint8_t(TypeDescriptorKind::PrimitiveTypeDescriptorCount))
+        {
+            descriptor = getOrCreatePrimitiveTypeDescriptor(kind);
+            return true;
+        }
+
+        switch(kind)
+        {
+        default:
+            // Unsupported type descriptor kind.
+            return false;
+        }
+    }
+
 private:
     std::array<TypeDescriptorPtr, uint8_t(TypeDescriptorKind::PrimitiveTypeDescriptorCount)> primitiveTypeDescriptors;
 
@@ -636,15 +762,20 @@ private:
     std::unordered_map<TypeMapperPtr, TypeDescriptorPtr> mapperToDescriptorMap;
 };
 
-void WriteStream::writeTypeDescriptorForTypeMapper(const TypeMapperPtr &typeMapper)
+inline void WriteStream::writeTypeDescriptorForTypeMapper(const TypeMapperPtr &typeMapper)
 {
     typeDescriptorContext->getForTypeMapper(typeMapper)->writeDescriptionWith(this);
 }
 
+inline bool ReadStream::readTypeDescriptor(TypeDescriptorPtr &descriptor)
+{
+    return typeDescriptorContext->readTypeDescriptorWith(descriptor, this);
+}
+
 /**
- * Field desriptor
+ * Aggregate field description.
  */
-struct FieldDescription
+struct AggregateFieldDescription
 {
     std::string name;
     TypeMapperWeakPtr typeMapper;
@@ -662,7 +793,20 @@ struct FieldDescription
     }
 };
 
-typedef std::function<void (const FieldDescription &)> FieldDescriptionIterationBlock;
+/**
+ * Materialization field description
+ */
+struct MaterializationFieldDescription
+{
+    std::string name;
+    TypeDescriptorPtr encoding;
+    AggregateFieldDescription *targetField = nullptr;;
+
+    bool readDescriptionWith(ReadStream *input)
+    {
+        return input->readUTF8_32_16(name) && input->readTypeDescriptor(encoding);
+    }
+};
 
 /**
  * Type mapper interface.
@@ -672,6 +816,11 @@ class TypeMapper
 {
 public:
     virtual ~TypeMapper() {};
+
+    virtual bool isMaterializationAdaptationType() const
+    {
+        return false;
+    }
 
     virtual bool isObjectType() const
     {
@@ -684,10 +833,23 @@ public:
     }
 
     virtual const std::string &getName() const = 0;
-    virtual void pushDataIntoBinaryBlob(BinaryBlobBuilder &binaryBlobBuilder) = 0;
 
-    virtual uint16_t getFieldCount() const = 0;
-    virtual void writeFieldDescriptionsWith(WriteStream *output) const = 0;
+    virtual void pushDataIntoBinaryBlob(BinaryBlobBuilder &binaryBlobBuilder)
+    {
+        (void)binaryBlobBuilder;
+    }
+
+    virtual uint16_t getFieldCount() const
+    {
+        return 0;
+    }
+
+    virtual void writeAggregateFieldDescriptionsWith(WriteStream *output) const
+    {
+        (void)output;
+        abort();
+    }
+
     virtual void writeInstanceWith(void *basePointer, WriteStream *output)
     {
         (void)basePointer;
@@ -695,7 +857,44 @@ public:
         abort();
     }
 
-    virtual void writeFieldWith(void *fieldPointer, WriteStream *output) = 0;
+    virtual void writeFieldWith(void *fieldPointer, WriteStream *output)
+    {
+        (void)fieldPointer;
+        (void)output;
+        abort();
+    }
+
+    virtual bool readInstanceWith(void *basePointer, ReadStream *input)
+    {
+        (void)basePointer;
+        (void)input;
+        abort();
+    }
+
+    virtual bool skipInstanceWith(ReadStream *input)
+    {
+        (void)input;
+        abort();
+    }
+
+    virtual bool readFieldWith(void *fieldPointer, const TypeDescriptorPtr &fieldEncoding, ReadStream *input)
+    {
+        (void)fieldPointer;
+        (void)fieldEncoding;
+        (void)input;
+        abort();
+    }
+    
+    virtual bool skipFieldWith(ReadStream *input)
+    {
+        (void)input;
+        abort();
+    }
+
+    virtual ObjectMapperPtr makeInstance()
+    {
+        abort();
+    }
 
     virtual TypeDescriptorPtr getOrCreateTypeDescriptor(TypeDescriptorContext *context) = 0;
 };
@@ -735,25 +934,6 @@ public:
         return name;
     }
 
-    virtual void pushDataIntoBinaryBlob(BinaryBlobBuilder &) override
-    {
-        // Nothing is required here.
-    }
-
-    virtual uint16_t getFieldCount() const override
-    {
-        return 0;
-    }
-
-    virtual void writeFieldDescriptionsWith(WriteStream *) const
-    {
-    }
-
-    virtual void writeInstanceWith(void *, WriteStream *) override
-    {
-        abort();
-    }
-
     std::string name;
 };
 
@@ -782,7 +962,7 @@ public:
         return uint16_t(fields.size());
     }
 
-    virtual void writeFieldDescriptionsWith(WriteStream *output) const override
+    virtual void writeAggregateFieldDescriptionsWith(WriteStream *output) const override
     {
         for(auto &field : fields)
             field.writeDescriptionWith(output);
@@ -797,7 +977,7 @@ public:
         }
     }
     std::string name;
-    std::vector<FieldDescription> fields;
+    std::vector<AggregateFieldDescription> fields;
 };
 
 /**
@@ -813,7 +993,7 @@ public:
         return true;
     }
 
-    static TypeMapperPtr makeWithFields(const std::string &name, const TypeMapperPtr &superType, const std::vector<FieldDescription> &fields)
+    static TypeMapperPtr makeWithFields(const std::string &name, const TypeMapperPtr &superType, const std::vector<AggregateFieldDescription> &fields)
     {
         auto result = std::make_shared<ObjectTypeMapper> ();
         result->name = name;
@@ -848,6 +1028,130 @@ public:
         writeInstanceWith(fieldPointer, output);
     }
 
+};
+
+/**
+ * Type mapper used to resolve differences between in memory and disk types.
+ */
+class MaterializationTypeMapper : public TypeMapper
+{
+public:
+
+    std::string name;
+    std::vector<MaterializationFieldDescription> fields;
+    TypeMapperPtr resolvedType;
+
+    virtual bool isMaterializationAdaptationType() const
+    {
+        return true;
+    }
+
+    virtual const std::string &getName() const
+    {
+        return name;
+    }
+
+    virtual void pushDataIntoBinaryBlob(BinaryBlobBuilder &)
+    {
+        abort();
+    }
+
+    virtual uint16_t getFieldCount() const
+    {
+        return uint16_t(fields.size());
+    }
+
+    virtual void writeAggregateFieldDescriptionsWith(WriteStream *) const
+    {
+        abort();
+    }
+
+    virtual void writeFieldWith(void *, WriteStream *)
+    {
+        abort();
+    }
+
+    virtual TypeDescriptorPtr getOrCreateTypeDescriptor(TypeDescriptorContext *)
+    {
+        abort();
+    }
+};
+
+/**
+ * Type mapper used to resolve differences in structure types.
+ */
+class StructureMaterializationTypeMapper : public MaterializationTypeMapper
+{
+public:
+};
+
+/**
+ * Type mapper used to resolve differences in structure types.
+ */
+class ObjectMaterializationTypeMapper : public MaterializationTypeMapper
+{
+public:
+
+    virtual ObjectMapperPtr makeInstance()
+    {
+        return resolvedType ? resolvedType->makeInstance() : nullptr;
+    }
+
+    virtual bool readInstanceWith(void *basePointer, ReadStream *input) override
+    {
+        auto s = supertype.lock();
+        if(s)
+        {
+            if(!s->readInstanceWith(basePointer, input))
+                return false;
+        }
+
+        for(auto &field : fields)
+        {
+            if(field.targetField)
+            {
+                auto targetField = field.targetField;
+                auto targetFieldTypeMapper = targetField->typeMapper.lock();
+                if(targetFieldTypeMapper)
+                {
+                    auto targetFieldPointer = targetField->accessor->getPointerForBasePointer(basePointer);
+                    targetFieldTypeMapper->readFieldWith(targetFieldPointer, field.encoding, input);
+                }
+                else
+                {
+                    if(!field.encoding->skipDataWith(input))
+                        return false;
+                }
+            }
+            else
+            {
+                if(!field.encoding->skipDataWith(input))
+                    return false;
+            }
+        }
+
+        return true;
+    }
+
+    virtual bool skipInstanceWith(ReadStream *input) override
+    {
+        auto s = supertype.lock();
+        if(s)
+        {
+            if(!s->skipInstanceWith(input))
+                return false;
+        }
+
+        for(auto &field : fields)
+        {
+            if(!field.encoding->skipDataWith(input))
+                return false;
+        }
+
+        return true;
+    }
+
+    ObjectMaterializationTypeMapperWeakPtr supertype;
 };
 
 template<typename FT, TypeDescriptorKind TDK>
@@ -1002,10 +1306,10 @@ public:
     static TypeMapperPtr typeMapperSingleton()
     {
         static auto singleton = ObjectTypeMapper::makeWithFields("RootValueBox", nullptr, {
-            FieldDescription{
+            AggregateFieldDescription{
                 "value",
                 typeMapperForType<ValueType> (),
-                memberFieldAccessorFor(&ThisType::value)
+                memberFieldAccessorFor(&ThisType::value),
             }
         });
         return singleton;
@@ -1154,7 +1458,7 @@ public:
     SerializationClusterWeakPtr supertype;
     TypeMapperPtr typeMapper;
     std::vector<ObjectMapperPtr> instances;
-    std::vector<size_t> objectFieldDescriptions;
+    std::vector<size_t> objectAggregateFieldDescriptions;
 
     void pushDataIntoBinaryBlob(BinaryBlobBuilder &binaryBlobBuilder)
     {
@@ -1174,7 +1478,7 @@ public:
         output->writeUInt32(super ? super->index + 1 : 0);
         output->writeUInt16(typeMapper->getFieldCount());
         output->writeUInt32(instances.size());
-        typeMapper->writeFieldDescriptionsWith(output);
+        typeMapper->writeAggregateFieldDescriptionsWith(output);
     }
 
     void writeInstancesWith(WriteStream *output)
@@ -1216,6 +1520,7 @@ public:
         writeValueTypeLayouts();
         writeClusterDescriptions();
         writeClusterInstances();
+        writeTrailerForObject(object);
     }
 
 private:
@@ -1296,6 +1601,10 @@ private:
             cluster->writeInstancesWith(output);
     }
 
+    void writeTrailerForObject(const ObjectMapperPtr &rootObject)
+    {
+        output->writeUInt32(objectToInstanceIndexTable[rootObject] + 1);
+    }
     void prepareForWriting()
     {
         objectCount = 0;
@@ -1374,7 +1683,8 @@ private:
         if(!input->readBytes(blobData.data(), blobSize))
             return false;
         input->setBinaryBlob(blobData.data(), blobSize);
-        
+        input->setTypeDescriptorContext(&typeDescriptorContext);
+
         return true;
     }
 
@@ -1383,6 +1693,7 @@ private:
         return parseHeaderAndReadBlob() &&
             parseValueTypeDescriptors() &&
             parseClusterDescriptors() &&
+            validateAndResolveTypes() &&
             parseClusterInstances() &&
             parseTrailer();
     }
@@ -1399,26 +1710,110 @@ private:
 
     bool parseClusterDescriptors()
     {
+        // Pre-allocate the cluster types.
+        clusterTypes.reserve(clusterCount);
+        for(uint32_t i = 0; i < clusterCount; ++i)
+            clusterTypes.push_back(std::make_shared<ObjectMaterializationTypeMapper> ());
+
+        // Parse the clusters.
+        clusterInstanceCount.reserve(clusterCount);
+        uint32_t totalInstanceCount = 0;
+        for(uint32_t clusterIndex = 0; clusterIndex < clusterCount; ++clusterIndex)
+        {
+            auto &clusterType = clusterTypes[clusterIndex];
+            uint32_t superTypeIndex;
+            uint16_t fieldCount;
+            uint32_t instanceCount;
+            if(!input->readUTF8_32_16(clusterType->name) ||
+                !input->readUInt32(superTypeIndex) || superTypeIndex > clusterIndex ||
+                !input->readUInt16(fieldCount) ||
+                !input->readUInt32(instanceCount))
+                return false;
+            clusterInstanceCount.push_back(instanceCount);
+            if(superTypeIndex > 0)
+                clusterType->supertype = clusterTypes[superTypeIndex - 1];
+
+            clusterType->fields.resize(fieldCount);
+            for(uint16_t fieldIndex = 0; fieldIndex < fieldCount; ++fieldIndex)
+            {
+                auto &field = clusterType->fields[fieldIndex];
+                if(!field.readDescriptionWith(input))
+                    return false;
+            }
+
+            totalInstanceCount += instanceCount;
+        }
+
+        // Validate the total instance count.
+        if(totalInstanceCount != objectCount)
+            return false;
+
+        return true;
+    }
+
+    bool validateAndResolveTypes()
+    {
         return true;
     }
 
     bool parseClusterInstances()
     {
+        // Make the instances.
+        instances.reserve(objectCount);
+        for(size_t i = 0; i < clusterTypes.size(); ++i)
+        {
+            auto &clusterType = clusterTypes[i];
+            auto instanceCount = clusterInstanceCount[i];
+            for(uint32_t j = 0; j < instanceCount; ++j)
+                instances.push_back(clusterType->makeInstance());
+        }
+
+        // Parse the instance data.
+        uint32_t nextInstanceIndex = 0;
+        for(size_t i = 0; i < clusterTypes.size(); ++i)
+        {
+            auto &clusterType = clusterTypes[i];
+            auto instanceCount = clusterInstanceCount[i];
+            for(uint32_t j = 0; j < instanceCount; ++j)
+            {
+                auto &instance = instances[nextInstanceIndex++];
+                if(instance)
+                {
+                    auto basePointer = instance->getObjectBasePointer();
+                    clusterType->readInstanceWith(basePointer, input);
+                }
+                else
+                {
+                    clusterType->skipInstanceWith(input);
+                }
+            }
+        }
+
         return true;
     }
 
     bool parseTrailer()
     {
+        uint32_t rootObjectIndex = 0;
+        if(!input->readUInt32(rootObjectIndex) || rootObjectIndex > objectCount)
+            return false;
+
+        rootObject = rootObjectIndex > 0 ? instances[rootObjectIndex - 1] : 0;
         return true;
     }
 
     ReadStream *input;
     ObjectMapperPtr rootObject;
     std::vector<uint8_t> blobData;
+    TypeDescriptorContext typeDescriptorContext;
 
     uint32_t valueTypeCount = 0;
     uint32_t clusterCount = 0;
     uint32_t objectCount = 0;
+
+    std::vector<ObjectMaterializationTypeMapperPtr> clusterTypes;
+    std::vector<uint32_t> clusterInstanceCount;
+    std::vector<ObjectMapperPtr> instances;
 };
 
 /**

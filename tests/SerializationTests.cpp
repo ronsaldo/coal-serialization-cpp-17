@@ -16,6 +16,62 @@
         ++testErrorCount; \
     } }) \
 
+/**
+ * Sample structure with inline Coal serialization specs.
+ */
+struct TestStructure : public coal::SerializableStructureTag
+{
+    typedef TestStructure SelfType;
+
+    static constexpr char const __coal_name__[] = "TestStructure";
+
+    static coal::FieldDescriptions __coal_fields__()
+    {
+        return {
+            {"booleanField", &SelfType::booleanField},
+            {"integerField", &SelfType::integerField},
+            {"floatField", &SelfType::floatField},
+        };
+    }
+
+    bool booleanField = false;
+    int integerField = 0;
+    float floatField = 0;
+
+    bool operator==(const TestStructure &other) const
+    {
+        return booleanField == other.booleanField
+            && integerField == other.integerField
+            && floatField == other.floatField;
+    }
+
+    friend std::ostream &operator<<(std::ostream &out, const TestStructure &value)
+    {
+        out << '{' << value.booleanField << ", " << value.integerField << ", " << value.floatField << "}";
+        return out;
+    }
+};
+
+struct TestStructureWithDifferentOrder
+{
+    int integerField = 0;
+    float floatField = 0;
+    bool booleanField = false;
+
+    bool operator==(const TestStructureWithDifferentOrder &other) const
+    {
+        return booleanField == other.booleanField
+            && integerField == other.integerField
+            && floatField == other.floatField;
+    }
+
+    friend std::ostream &operator<<(std::ostream &out, const TestStructureWithDifferentOrder &value)
+    {
+        out << '{' << value.booleanField << ", " << value.integerField << ", " << value.floatField << "}";
+        return out;
+    }
+};
+
 int main()
 {
     int testErrorCount = 0;
@@ -37,6 +93,12 @@ int main()
 
         assertEquals(42.5f, coal::deserialize<float> (coal::serialize<float> (42.5f)).value());
         assertEquals(42.5, coal::deserialize<double> (coal::serialize<double> (42.5)).value());
+    }
+
+    // Structure
+    {
+        // Empty
+        assertEquals(TestStructure{}, coal::deserialize<TestStructure> (coal::serialize<TestStructure> (TestStructure{})).value());
     }
 
     if(testErrorCount > 0)

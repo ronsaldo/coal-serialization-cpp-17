@@ -39,10 +39,9 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <algorithm>
-#include <mutex>
 
+#include <mutex>
 #include <functional>
-#include <iostream>
 
 namespace coal
 {
@@ -780,8 +779,16 @@ inline bool ReadStream::readTypeDescriptor(TypeDescriptorPtr &descriptor)
 /**
  * Aggregate field description.
  */
-struct AggregateFieldDescription
+struct FieldDescription
 {
+    FieldDescription() = default;
+
+    FieldDescription(const std::string &initialName, const TypeMapperPtr &initialTypeMapper, const FieldAccessorPtr &initialAccessor)
+        : name(initialName), typeMapper(initialTypeMapper), accessor(initialAccessor) {}
+
+    template<typename CT, typename MT>
+    FieldDescription(const std::string &initialName, MT CT::*fieldPointer);
+
     std::string name;
     TypeMapperWeakPtr typeMapper;
     FieldAccessorPtr accessor;
@@ -798,6 +805,8 @@ struct AggregateFieldDescription
     }
 };
 
+typedef std::vector<FieldDescription> FieldDescriptions;
+
 /**
  * Materialization field description
  */
@@ -805,7 +814,7 @@ struct MaterializationFieldDescription
 {
     std::string name;
     TypeDescriptorPtr encoding;
-    AggregateFieldDescription *targetField = nullptr;
+    FieldDescription *targetField = nullptr;
     TypeMapperPtr targetTypeMapper;
 
     bool readDescriptionWith(ReadStream *input)
@@ -857,13 +866,13 @@ public:
         return 0;
     }
 
-    virtual AggregateFieldDescription *getFieldNamed(const std::string &fieldName)
+    virtual FieldDescription *getFieldNamed(const std::string &fieldName)
     {
         (void)fieldName;
         return nullptr;
     }
 
-    virtual void writeAggregateFieldDescriptionsWith(WriteStream *output) const
+    virtual void writeFieldDescriptionsWith(WriteStream *output) const
     {
         (void)output;
         abort();
@@ -1073,13 +1082,13 @@ public:
         return uint16_t(fields.size());
     }
 
-    virtual AggregateFieldDescription *getFieldNamed(const std::string &name) override
+    virtual FieldDescription *getFieldNamed(const std::string &name) override
     {
         auto it = fieldNameMap.find(name);
         return it != fieldNameMap.end() ? &fields[it->second] : nullptr;
     }
 
-    virtual void writeAggregateFieldDescriptionsWith(WriteStream *output) const override
+    virtual void writeFieldDescriptionsWith(WriteStream *output) const override
     {
         for(auto &field : fields)
             field.writeDescriptionWith(output);
@@ -1107,7 +1116,7 @@ public:
 
 protected:
 
-    void addFields(const std::vector<AggregateFieldDescription> &newFields)
+    void addFields(const std::vector<FieldDescription> &newFields)
     {
         fields.reserve(newFields.size());
         for(auto &field : newFields)
@@ -1117,7 +1126,7 @@ protected:
         }
     }
 
-    std::vector<AggregateFieldDescription> fields;
+    std::vector<FieldDescription> fields;
     std::unordered_map<std::string, size_t> fieldNameMap;
 
 };
@@ -1142,7 +1151,7 @@ public:
         return factory();
     }
 
-    static TypeMapperPtr makeWithFields(const std::string &name, const TypeMapperPtr &superType, const ObjectMapperFactory &factory, const std::vector<AggregateFieldDescription> &fields)
+    static TypeMapperPtr makeWithFields(const std::string &name, const TypeMapperPtr &superType, const ObjectMapperFactory &factory, const std::vector<FieldDescription> &fields)
     {
         auto result = std::make_shared<ObjectTypeMapper> ();
         result->name = name;
@@ -1220,7 +1229,7 @@ public:
         return uint16_t(fields.size());
     }
 
-    virtual void writeAggregateFieldDescriptionsWith(WriteStream *) const
+    virtual void writeFieldDescriptionsWith(WriteStream *) const
     {
         abort();
     }
@@ -1640,6 +1649,13 @@ FieldAccessorPtr memberFieldAccessorFor(MT CT::*fieldPointer)
     return std::make_shared<MemberFieldAccessor<CT, MT>> (fieldPointer);
 };
 
+template<typename CT, typename MT>
+inline FieldDescription::FieldDescription(const std::string &initialName, MT CT::*fieldPointer)
+    : name(initialName), typeMapper(typeMapperForType<MT> ()), accessor(memberFieldAccessorFor(fieldPointer))
+{
+}
+
+
 /**
  * I am a default value type box object.
  */
@@ -1660,12 +1676,8 @@ public:
                 return std::make_shared<ThisType> ();
             },
             {
-            AggregateFieldDescription{
-                "value",
-                typeMapperForType<ValueType> (),
-                memberFieldAccessorFor(&ThisType::value),
-            }
-        });
+                {"value", &ThisType::value}
+            });
         return singleton;
     }
 
@@ -1812,7 +1824,7 @@ public:
     SerializationClusterWeakPtr supertype;
     TypeMapperPtr typeMapper;
     std::vector<ObjectMapperPtr> instances;
-    std::vector<size_t> objectAggregateFieldDescriptions;
+    std::vector<size_t> objectFieldDescriptions;
 
     void pushDataIntoBinaryBlob(BinaryBlobBuilder &binaryBlobBuilder)
     {
@@ -1832,7 +1844,7 @@ public:
         output->writeUInt32(super ? super->index + 1 : 0);
         output->writeUInt16(typeMapper->getFieldCount());
         output->writeUInt32(instances.size());
-        typeMapper->writeAggregateFieldDescriptionsWith(output);
+        typeMapper->writeFieldDescriptionsWith(output);
     }
 
     void writeInstancesWith(WriteStream *output)
@@ -1959,6 +1971,7 @@ private:
     {
         output->writeUInt32(objectToInstanceIndexTable[rootObject] + 1);
     }
+
     void prepareForWriting()
     {
         objectCount = 0;

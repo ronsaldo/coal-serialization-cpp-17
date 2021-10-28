@@ -23,7 +23,7 @@ struct TestStructure : public coal::SerializableStructureTag
 {
     typedef TestStructure SelfType;
 
-    static constexpr char const __coal_name__[] = "TestStructure";
+    static constexpr char const __coal_typename__[] = "TestStructure";
 
     static coal::FieldDescriptions __coal_fields__()
     {

@@ -937,7 +937,6 @@ public:
         (void)aBlock;
     }
 
-
     virtual void withMaterializationTypeMapperDependenciesDo(const TypeMapperIterationBlock &aBlock)
     {
         if(isMaterializationDependencyType())
@@ -1191,11 +1190,23 @@ public:
 class StructureTypeMapper : public AggregateTypeMapper
 {
 public:
+    static TypeMapperPtr makeWithFields(const std::string &name, const std::vector<FieldDescription> &fields)
+    {
+        auto result = std::make_shared<StructureTypeMapper> ();
+        result->name = name;
+        result->addFields(fields);
+        return result;
+    }
+
     virtual void writeFieldWith(void *fieldPointer, WriteStream *output)
     {
         writeInstanceWith(fieldPointer, output);
     }
 
+    virtual TypeDescriptorPtr getOrCreateTypeDescriptor(TypeDescriptorContext *context)
+    {
+        abort();
+    }
 };
 
 /**
@@ -1352,6 +1363,33 @@ public:
     ObjectMaterializationTypeMapperWeakPtr supertype;
 };
 
+/**
+ * Makes a type mapper for the specified type.
+ */
+template<typename T, typename C=void>
+struct TypeMapperFor;
+
+template<typename T>
+inline TypeMapperPtr typeMapperForType()
+{
+    return TypeMapperFor<T>::apply();
+}
+
+template<typename T>
+struct SingletonTypeMapperFor
+{
+    static constexpr bool isObjectType = T::isObjectType;
+    static constexpr bool isValueType = !isObjectType;
+
+    static TypeMapperPtr apply()
+    {
+        return T::uniqueInstance();
+    }
+};
+
+/**
+ * Numeric primitive type mapper.
+ */
 template<typename FT, TypeDescriptorKind TDK>
 class NumericPrimitiveTypeMapper : public PrimitiveTypeMapper
 {
@@ -1360,6 +1398,7 @@ public:
     typedef NumericPrimitiveTypeMapper<FT, TDK> ThisType;
 
     static constexpr TypeDescriptorKind EncodingDescriptorKind = TDK;
+    static constexpr bool isObjectType = false;
 
     static TypeMapperPtr uniqueInstance()
     {
@@ -1544,21 +1583,6 @@ public:
     }
 };
 
-/**
- * Makes a type mapper for the specified type.
- */
-template<typename T, typename C=void>
-struct TypeMapperFor;
-
-template<typename T>
-struct SingletonTypeMapperFor
-{
-    static TypeMapperPtr apply()
-    {
-        return T::uniqueInstance();
-    }
-};
-
 template<>
 struct TypeMapperFor<bool> : SingletonTypeMapperFor<NumericPrimitiveTypeMapper<bool, TypeDescriptorKind::Boolean8>> {};
 
@@ -1601,11 +1625,60 @@ struct TypeMapperFor<float> : SingletonTypeMapperFor<NumericPrimitiveTypeMapper<
 template<>
 struct TypeMapperFor<double> : SingletonTypeMapperFor<NumericPrimitiveTypeMapper<double, TypeDescriptorKind::Float64>> {};
 
+/**
+ * Tag for marking a serializable structure.
+ */
+struct SerializableStructureTag {};
+
+/**
+ * Utility for extracting the metadata for a structure type.
+ */
+template<typename T, typename C=void>
+struct StructureTypeMetadataFor;
+
 template<typename T>
-inline TypeMapperPtr typeMapperForType()
+struct StructureTypeMetadataFor<T, typename std::enable_if< std::is_base_of<SerializableStructureTag, T>::value >::type>
 {
-    return TypeMapperFor<T>::apply();
-}
+    typedef void type;
+
+    static FieldDescriptions getFields()
+    {
+        return T::__coal_fields__();
+    }
+
+    static std::string getTypeName()
+    {
+        return T::__coal_typename__;
+    }
+};
+
+template<typename T>
+struct ReflectedStructureTypeMapperFor
+{
+    typedef StructureTypeMetadataFor<T> Metadata;
+
+    static constexpr bool isObjectType = false;
+    static constexpr bool isValueType = true;
+
+    static TypeMapperPtr apply()
+    {
+        static TypeMapperPtr singleton;
+        static std::once_flag singletonCreation;
+        std::call_once(singletonCreation, [&](){
+            singleton = StructureTypeMapper::makeWithFields(Metadata::getTypeName(), Metadata::getFields());
+        });
+
+        return singleton;
+    }
+};
+
+template<typename T>
+struct TypeMapperFor<T, typename StructureTypeMetadataFor<T>::type> : ReflectedStructureTypeMapperFor<T> {};
+
+/**
+ * Tag for marking a serializable shared object class.
+ */
+struct SerializableSharedObjectClassTag {};
 
 /**
  * Object mapper interface.
@@ -1708,110 +1781,17 @@ public:
 };
 
 /**
- * Tag for marking a serializable structure.
- */
-struct SerializableStructureTag {};
-
-/**
- * Tag for marking a serializable object class.
- */
-struct SerializableObjectClassTag {};
-
-/**
  * Makes an object mapper interface for the specified object.
  */
 template<typename T, typename C=void>
 struct ObjectMapperClassFor;
 
-template<>
-struct ObjectMapperClassFor<bool>
+template<typename T>
+struct ObjectMapperClassFor<T, typename std::enable_if<TypeMapperFor<T>::isValueType>::type>
 {
-    typedef RootValueBox<bool> type;
+    typedef RootValueBox<T> type;
 };
 
-template<>
-struct ObjectMapperClassFor<uint8_t>
-{
-    typedef RootValueBox<uint8_t> type;
-};
-
-template<>
-struct ObjectMapperClassFor<uint16_t>
-{
-    typedef RootValueBox<uint16_t> type;
-};
-
-template<>
-struct ObjectMapperClassFor<uint32_t>
-{
-    typedef RootValueBox<uint32_t> type;
-};
-
-template<>
-struct ObjectMapperClassFor<uint64_t>
-{
-    typedef RootValueBox<uint64_t> type;
-};
-
-template<>
-struct ObjectMapperClassFor<int8_t>
-{
-    typedef RootValueBox<int8_t> type;
-};
-
-template<>
-struct ObjectMapperClassFor<int16_t>
-{
-    typedef RootValueBox<int16_t> type;
-};
-
-template<>
-struct ObjectMapperClassFor<int32_t>
-{
-    typedef RootValueBox<int32_t> type;
-};
-
-template<>
-struct ObjectMapperClassFor<int64_t>
-{
-    typedef RootValueBox<int64_t> type;
-};
-
-template<>
-struct ObjectMapperClassFor<char>
-{
-    typedef RootValueBox<char> type;
-};
-
-template<>
-struct ObjectMapperClassFor<char16_t>
-{
-    typedef RootValueBox<char16_t> type;
-};
-
-template<>
-struct ObjectMapperClassFor<char32_t>
-{
-    typedef RootValueBox<char32_t> type;
-};
-
-template<>
-struct ObjectMapperClassFor<float>
-{
-    typedef RootValueBox<float> type;
-};
-
-template<>
-struct ObjectMapperClassFor<double>
-{
-    typedef RootValueBox<double> type;
-};
-
-template<>
-struct ObjectMapperClassFor<std::string>
-{
-    typedef RootValueBox<std::string> type;
-};
 
 /**
  * Serialization cluster

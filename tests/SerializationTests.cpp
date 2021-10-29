@@ -72,6 +72,30 @@ struct TestStructureWithDifferentOrder
     }
 };
 
+namespace coal
+{
+template<>
+struct StructureTypeMetadataFor<TestStructureWithDifferentOrder>
+{
+    typedef void type;
+
+    static FieldDescriptions getFields()
+    {
+        return {
+            {"booleanField", &TestStructureWithDifferentOrder::booleanField},
+            {"integerField", &TestStructureWithDifferentOrder::integerField},
+            {"floatField", &TestStructureWithDifferentOrder::floatField},
+        };
+    }
+
+    static std::string getTypeName()
+    {
+        return "TestStructure";
+    }
+};
+
+}
+
 int main()
 {
     int testErrorCount = 0;
@@ -98,7 +122,14 @@ int main()
     // Structure
     {
         // Empty
-        assertEquals(TestStructure{}, coal::deserialize<TestStructure> (coal::serialize<TestStructure> (TestStructure{})).value());
+        assertEquals(TestStructure{}, coal::deserialize<TestStructure> (coal::serialize(TestStructure{})).value());
+        assertEquals(TestStructureWithDifferentOrder{}, coal::deserialize<TestStructureWithDifferentOrder> (coal::serialize(TestStructureWithDifferentOrder{})).value());
+
+        assertEquals((TestStructure{{}, true, -42, 42.5f}), coal::deserialize<TestStructure> (coal::serialize(TestStructure{{}, true, -42, 42.5f})).value());
+        assertEquals((TestStructureWithDifferentOrder{-42, 42.5, true}), coal::deserialize<TestStructureWithDifferentOrder> (coal::serialize(TestStructureWithDifferentOrder{-42, 42.5, true})).value());
+
+        assertEquals((TestStructureWithDifferentOrder{-42, 42.5, true}), coal::deserialize<TestStructureWithDifferentOrder> (coal::serialize(TestStructure{{}, true, -42, 42.5f})).value());
+        assertEquals((TestStructure{{}, true, -42, 42.5f}), coal::deserialize<TestStructure> (coal::serialize(TestStructureWithDifferentOrder{-42, 42.5, true})).value());
     }
 
     if(testErrorCount > 0)

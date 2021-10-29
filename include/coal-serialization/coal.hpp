@@ -1793,9 +1793,33 @@ template<typename T>
 struct TypeMapperFor<T, typename StructureTypeMetadataFor<T>::type> : ReflectedStructureTypeMapperFor<T> {};
 
 /**
- * Tag for marking a serializable shared object class.
+ * Utility for extracting the metadata for a class type.
  */
-struct SerializableSharedObjectClassTag {};
+template<typename T, typename C=void>
+struct ClassTypeMetadataFor;
+
+template<typename T>
+struct ReflectedClassTypeMapperFor
+{
+    typedef ClassTypeMetadataFor<T> Metadata;
+
+    static constexpr bool isObjectType = true;
+    static constexpr bool isValueType = false;
+
+    static TypeMapperPtr apply()
+    {
+        static TypeMapperPtr singleton;
+        static std::once_flag singletonCreation;
+        std::call_once(singletonCreation, [&](){
+            singleton = ObjectTypeMapper::makeWithFields(Metadata::getTypeName(), nullptr, Metadata::newInstance, Metadata::getFields());
+        });
+
+        return singleton;
+    }
+};
+
+template<typename T>
+struct TypeMapperFor<T, typename ClassTypeMetadataFor<T>::type> : ReflectedClassTypeMapperFor<T> {};
 
 /**
  * Object mapper interface.
@@ -1898,6 +1922,89 @@ public:
 };
 
 /**
+ * I am a default wrapper object for a shared object. Shared objects are objects whose pointer are wrapper in a std::shared_ptr
+ */
+template<typename VT>
+class SharedObjectWrapper : public ObjectMapper
+{
+public:
+    typedef VT ValueType;
+    typedef std::shared_ptr<ValueType> ValueTypePtr;
+    typedef SharedObjectWrapper<ValueType> ThisType;
+
+    SharedObjectWrapper(const ValueTypePtr &initialReference = ValueTypePtr())
+        : reference(initialReference) {}
+
+    static TypeMapperPtr typeMapperSingleton()
+    {
+        return typeMapperForType<ValueType> ();
+    }
+
+    static ObjectMapperPtr makeFor(const ValueTypePtr &value)
+    {
+        return std::make_shared<ThisType> (value);
+    }
+
+    static std::optional<ValueTypePtr> unwrapDeserializedRootObjectOrValue(const ObjectMapperPtr &deserializedRootObject)
+    {
+        if(!deserializedRootObject)
+            return std::nullopt;
+
+        return std::static_pointer_cast<ThisType> (deserializedRootObject)->reference;
+    }
+
+    virtual TypeMapperPtr getTypeMapper() const override
+    {
+        return typeMapperSingleton();
+    }
+
+    virtual void *getObjectBasePointer() override
+    {
+        return reinterpret_cast<void*> (reference.get());
+    }
+
+    ValueTypePtr reference;
+};
+
+/**
+ * Tag for marking a serializable shared object class.
+ */
+struct SerializableSharedObjectClassTag {};
+
+template<typename T>
+ObjectMapperPtr makeSharedObjectWrapperFor(const std::shared_ptr<T> &reference)
+{
+    return SharedObjectWrapper<T>::makeFor(reference);
+}
+
+template<typename T>
+ObjectMapperPtr makeNewSharedObject()
+{
+    return makeSharedObjectWrapperFor<T> (std::make_shared<T> ());
+}
+
+template<typename T>
+struct ClassTypeMetadataFor<T, typename std::enable_if< std::is_base_of<SerializableSharedObjectClassTag, T>::value >::type>
+{
+    typedef void type;
+
+    static ObjectMapperPtr newInstance()
+    {
+        return makeNewSharedObject<T> ();
+    }
+
+    static FieldDescriptions getFields()
+    {
+        return T::__coal_fields__();
+    }
+
+    static std::string getTypeName()
+    {
+        return T::__coal_typename__;
+    }
+};
+
+/**
  * Makes an object mapper interface for the specified object.
  */
 template<typename T, typename C=void>
@@ -1909,6 +2016,17 @@ struct ObjectMapperClassFor<T, typename std::enable_if<TypeMapperFor<T>::isValue
     typedef RootValueBox<T> type;
 };
 
+template<typename T>
+struct ObjectMapperClassFor<std::shared_ptr<T>, typename std::enable_if<TypeMapperFor<T>::isObjectType>::type>
+{
+    typedef SharedObjectWrapper<T> type;
+};
+
+template<typename T>
+struct ObjectMapperClassFor<const T &> : ObjectMapperClassFor<T> {};
+
+template<typename T>
+struct ObjectMapperClassFor<T &> : ObjectMapperClassFor<T> {};
 
 /**
  * Serialization cluster

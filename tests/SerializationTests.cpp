@@ -9,8 +9,8 @@
     }
 
 #define assertEquals(expected, obtained) guardException({ \
-    auto expectedValue = expected; \
-    auto obtainedValue = obtained; \
+    const auto &expectedValue = expected; \
+    const auto &obtainedValue = obtained; \
     if(!(expectedValue == obtainedValue)) { \
         std::cout << __FILE__ << ":" << __LINE__ << ": Assertion failure: " << obtainedValue << " is not equal to the expected value of " << expectedValue << std::endl; \
         ++testErrorCount; \
@@ -126,6 +126,43 @@ struct TestNestedStructureWithDifferentOrder
     }
 };
 
+/**
+ * TestSharedObject
+ */
+class TestSharedObject : public coal::SerializableSharedObjectClassTag
+{
+public:
+    typedef TestSharedObject SelfType;
+
+    static constexpr char const __coal_typename__[] = "TestSharedObject";
+
+    static coal::FieldDescriptions __coal_fields__()
+    {
+        return {
+            {"booleanField", &SelfType::booleanField},
+            {"integerField", &SelfType::integerField},
+            {"floatField", &SelfType::floatField},
+        };
+    }
+
+    bool booleanField = false;
+    int integerField = 0;
+    float floatField = 0;
+
+    bool operator==(const TestSharedObject &other) const
+    {
+        return booleanField == other.booleanField
+            && integerField == other.integerField
+            && floatField == other.floatField;
+    }
+
+    friend std::ostream &operator<<(std::ostream &out, const TestSharedObject &object)
+    {
+        out << '{' << object.booleanField << ", " << object.integerField << ", " << object.floatField << "}";
+        return out;
+    }
+};
+
 namespace coal
 {
 template<>
@@ -194,7 +231,6 @@ int main()
 
     // Structure
     {
-        // Empty
         assertEquals(TestStructure{}, coal::deserialize<TestStructure> (coal::serialize(TestStructure{})).value());
         assertEquals(TestStructureWithDifferentOrder{}, coal::deserialize<TestStructureWithDifferentOrder> (coal::serialize(TestStructureWithDifferentOrder{})).value());
         assertEquals(TestNestedStructure{}, coal::deserialize<TestNestedStructure> (coal::serialize(TestNestedStructure{})).value());
@@ -210,6 +246,26 @@ int main()
 
         assertEquals((TestNestedStructureWithDifferentOrder{13, {-42, 42.5f, true}}), coal::deserialize<TestNestedStructureWithDifferentOrder> (coal::serialize(TestNestedStructure{{}, {{}, true, -42, 42.5f}, 13})).value());
         assertEquals((TestNestedStructure{{}, {{}, true, -42, 42.5f}, 13}), coal::deserialize<TestNestedStructure> (coal::serialize(TestNestedStructureWithDifferentOrder{13, {-42, 42.5f, true}})).value());
+    }
+
+    // TestSharedObject empty
+    {
+        auto object = std::make_shared<TestSharedObject> ();
+        auto serialized = coal::serialize(object);
+        auto materializedObject = coal::deserialize<std::shared_ptr<TestSharedObject>> (serialized).value();
+        assertEquals(*object, *materializedObject);
+    }
+
+    // TestSharedObject non-empty
+    {
+        auto object = std::make_shared<TestSharedObject> ();
+        object->booleanField = true;
+        object->integerField = -42;
+        object->floatField = 42.5f;
+        
+        auto serialized = coal::serialize(object);
+        auto materializedObject = coal::deserialize<std::shared_ptr<TestSharedObject>> (serialized).value();
+        assertEquals(*object, *materializedObject);
     }
 
     if(testErrorCount > 0)

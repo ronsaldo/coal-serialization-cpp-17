@@ -633,11 +633,11 @@ class StructTypeDescriptor : public TypeDescriptor
 public:
     virtual void writeDescriptionWith(WriteStream *output) override
     {
-        (void)output;
-        assert("TODO: StructTypeDescriptor " && false);
-        abort();
+        output->writeUInt8(uint8_t(kind));
+        output->writeUInt32(index);
     }
 
+    uint32_t index = 0;
     TypeMapperPtr typeMapper;
 };
 
@@ -731,11 +731,24 @@ public:
         return uint32_t(valueTypes.size());
     }
 
-    void writeValueTypeLayoutsWith(WriteStream *output)
+    TypeDescriptorPtr addValueType(const TypeMapperPtr &mapper)
     {
-        (void)output;
-        // TODO: Implement this part
+        assert(mapperToDescriptorMap.find(mapper) == mapperToDescriptorMap.end());
+
+        auto descriptor = std::make_shared<StructTypeDescriptor> ();
+        descriptor->kind = TypeDescriptorKind::Struct;
+        descriptor->index = valueTypes.size();
+        descriptor->typeMapper = mapper;
+
+        valueTypes.push_back(mapper);
+        valueTypeDescriptors.push_back(descriptor);
+        mapperToDescriptorMap.insert({mapper, descriptor});
+        return descriptor;
     }
+
+    void pushDataIntoBinaryBlob(BinaryBlobBuilder &binaryBlobBuilder);
+
+    void writeValueTypeLayoutsWith(WriteStream *output);
 
     bool readTypeDescriptorWith(TypeDescriptorPtr &descriptor, ReadStream *input)
     {
@@ -753,6 +766,15 @@ public:
 
         switch(kind)
         {
+        case TypeDescriptorKind::Struct:
+            {
+                uint32_t structureIndex = 0;
+                if(!input->readUInt32(structureIndex) || structureIndex >= valueTypes.size())
+                    return false;
+
+                descriptor = valueTypeDescriptors[structureIndex];
+                return true;
+            }
         default:
             // Unsupported type descriptor kind.
             return false;
@@ -763,6 +785,7 @@ private:
     std::array<TypeDescriptorPtr, uint8_t(TypeDescriptorKind::PrimitiveTypeDescriptorCount)> primitiveTypeDescriptors;
 
     std::vector<TypeMapperPtr> valueTypes;
+    std::vector<TypeDescriptorPtr> valueTypeDescriptors;
     std::unordered_map<TypeMapperPtr, TypeDescriptorPtr> mapperToDescriptorMap;
 };
 
@@ -839,7 +862,12 @@ public:
         return false;
     }
 
-    virtual bool isMaterializationDependencyType() const
+    virtual bool isSerializationDependencyType() const
+    {
+        return false;
+    }
+
+    virtual bool isAggregateType() const
     {
         return false;
     }
@@ -859,6 +887,11 @@ public:
     virtual void pushDataIntoBinaryBlob(BinaryBlobBuilder &binaryBlobBuilder)
     {
         (void)binaryBlobBuilder;
+    }
+
+    virtual TypeMapperPtr getResolvedType() const
+    {
+        return nullptr;
     }
 
     virtual uint16_t getFieldCount() const
@@ -932,16 +965,16 @@ public:
 
     virtual TypeDescriptorPtr getOrCreateTypeDescriptor(TypeDescriptorContext *context) = 0;
 
-    virtual void materializationTypeMapperDependenciesDo(const TypeMapperIterationBlock &aBlock)
+    virtual void typeMapperDependenciesDo(const TypeMapperIterationBlock &aBlock)
     {
         (void)aBlock;
     }
 
-    virtual void withMaterializationTypeMapperDependenciesDo(const TypeMapperIterationBlock &aBlock)
+    virtual void withTypeMapperDependenciesDo(const TypeMapperIterationBlock &aBlock)
     {
-        if(isMaterializationDependencyType())
+        if(isSerializationDependencyType())
             aBlock(shared_from_this());
-        materializationTypeMapperDependenciesDo(aBlock);
+        typeMapperDependenciesDo(aBlock);
     }
 };
 
@@ -955,6 +988,27 @@ inline TypeDescriptorPtr TypeDescriptorContext::getForTypeMapper(const TypeMappe
     mapperToDescriptorMap.insert({mapper, descriptor});
     return descriptor;
 }
+
+inline void TypeDescriptorContext::pushDataIntoBinaryBlob(BinaryBlobBuilder &binaryBlobBuilder)
+{
+    for(auto &typeMapper : valueTypes)
+    {
+        binaryBlobBuilder.internString16(typeMapper->getName());
+        typeMapper->pushDataIntoBinaryBlob(binaryBlobBuilder);
+    }
+}
+
+inline void TypeDescriptorContext::writeValueTypeLayoutsWith(WriteStream *output)
+{
+    for(auto &typeMapper : valueTypes)
+    {
+        output->writeUTF8_32_16(typeMapper->getName());
+        output->writeUInt16(typeMapper->getFieldCount());
+        typeMapper->writeFieldDescriptionsWith(output);
+    }
+}
+
+
 /**
  * Type mapper registry interface.
  * I am an interface used for looking up type mappers by name. I am typically used for customizing the materialization process
@@ -997,7 +1051,7 @@ public:
 
         addedTypes.insert(typeMapper);
         nameMap.insert({typeMapper->getName(), typeMapper});
-        typeMapper->materializationTypeMapperDependenciesDo([&](const TypeMapperPtr &dependency) {
+        typeMapper->typeMapperDependenciesDo([&](const TypeMapperPtr &dependency) {
             addWithDependencies(dependency);
         });
     }
@@ -1058,8 +1112,12 @@ public:
 class AggregateTypeMapper : public TypeMapper
 {
 public:
+    virtual bool isAggregateType() const override
+    {
+        return true;
+    }
 
-    virtual bool isMaterializationDependencyType() const override
+    virtual bool isSerializationDependencyType() const override
     {
         return true;
     }
@@ -1103,13 +1161,13 @@ public:
     }
     std::string name;
 
-    void materializationTypeMapperDependenciesDo(const TypeMapperIterationBlock &aBlock) override
+    void typeMapperDependenciesDo(const TypeMapperIterationBlock &aBlock) override
     {
         for(auto &field : fields)
         {
             auto fieldTypeMapper = field.typeMapper.lock();
             if(fieldTypeMapper)
-                fieldTypeMapper->withMaterializationTypeMapperDependenciesDo(aBlock);
+                fieldTypeMapper->withTypeMapperDependenciesDo(aBlock);
         }
     }
 
@@ -1171,12 +1229,12 @@ public:
         abort();
     }
 
-    void materializationTypeMapperDependenciesDo(const TypeMapperIterationBlock &aBlock)
+    void typeMapperDependenciesDo(const TypeMapperIterationBlock &aBlock)
     {
         auto st = superType.lock();
         if(st)
-            st->withMaterializationTypeMapperDependenciesDo(aBlock);
-        AggregateTypeMapper::materializationTypeMapperDependenciesDo(aBlock);
+            st->withTypeMapperDependenciesDo(aBlock);
+        AggregateTypeMapper::typeMapperDependenciesDo(aBlock);
     }
 
     TypeMapperWeakPtr superType;
@@ -1203,8 +1261,28 @@ public:
         writeInstanceWith(fieldPointer, output);
     }
 
-    virtual TypeDescriptorPtr getOrCreateTypeDescriptor(TypeDescriptorContext *context)
+    virtual bool canReadFieldWithTypeDescriptor(const TypeDescriptorPtr &encoding) const
     {
+        if(encoding->kind != TypeDescriptorKind::Struct)
+            return false;
+        
+        auto materializationTypeMapper = std::static_pointer_cast<StructTypeDescriptor> (encoding)->typeMapper;
+        return materializationTypeMapper
+            && materializationTypeMapper->getResolvedType() == shared_from_this()
+            && materializationTypeMapper->isMaterializationAdaptationType()
+            && materializationTypeMapper->isAggregateType()
+            && !materializationTypeMapper->isObjectType();
+    }
+
+    virtual bool readFieldWith(void *basePointer, const TypeDescriptorPtr &fieldEncoding, ReadStream *input)
+    {
+        assert(canReadFieldWithTypeDescriptor(fieldEncoding));
+        return std::static_pointer_cast<StructTypeDescriptor> (fieldEncoding)->typeMapper->readFieldWith(basePointer, fieldEncoding, input);
+    }
+
+    virtual TypeDescriptorPtr getOrCreateTypeDescriptor(TypeDescriptorContext *)
+    {
+        // This should not be reached.
         abort();
     }
 };
@@ -1220,6 +1298,11 @@ public:
     std::vector<MaterializationFieldDescription> fields;
     TypeMapperPtr resolvedType;
 
+    virtual bool isAggregateType() const
+    {
+        return true;
+    }
+
     virtual bool isMaterializationAdaptationType() const
     {
         return true;
@@ -1228,6 +1311,11 @@ public:
     virtual const std::string &getName() const
     {
         return name;
+    }
+
+    virtual TypeMapperPtr getResolvedType() const
+    {
+        return resolvedType;
     }
 
     virtual void pushDataIntoBinaryBlob(BinaryBlobBuilder &)
@@ -1297,6 +1385,34 @@ public:
 class StructureMaterializationTypeMapper : public MaterializationTypeMapper
 {
 public:
+
+    virtual bool canReadFieldWithTypeDescriptor(const TypeDescriptorPtr &encoding) const
+    {
+        return encoding->kind == TypeDescriptorKind::Struct && std::static_pointer_cast<StructTypeDescriptor> (encoding)->typeMapper == shared_from_this();
+    }
+
+    virtual bool readFieldWith(void *basePointer, const TypeDescriptorPtr &fieldEncoding, ReadStream *input)
+    {
+        assert(canReadFieldWithTypeDescriptor(fieldEncoding));
+
+        for(auto &field : fields)
+        {
+            if(field.targetField && field.targetTypeMapper)
+            {
+                auto targetFieldPointer = field.targetField->accessor->getPointerForBasePointer(basePointer);
+                if(!field.targetTypeMapper->readFieldWith(targetFieldPointer, field.encoding, input))
+                    return false;
+            }
+            else
+            {
+                if(!field.encoding->skipDataWith(input))
+                    return false;
+            }
+        }
+
+        return true;
+    }
+
 };
 
 /**
@@ -1330,7 +1446,8 @@ public:
             if(field.targetField && field.targetTypeMapper)
             {
                 auto targetFieldPointer = field.targetField->accessor->getPointerForBasePointer(basePointer);
-                field.targetTypeMapper->readFieldWith(targetFieldPointer, field.encoding, input);
+                if(!field.targetTypeMapper->readFieldWith(targetFieldPointer, field.encoding, input))
+                    return false;
             }
             else
             {
@@ -1870,6 +1987,13 @@ public:
     }
 
 private:
+    enum class ValueTypeScanColor: uint8_t
+    {
+        White = 0,
+        Gray,
+        Black
+    };
+
     void addPendingObject(const ObjectMapperPtr &object)
     {
         if(seenSet.find(object) != seenSet.end())
@@ -1896,8 +2020,49 @@ private:
         cluster->addObject(object);
     }
 
+    TypeDescriptorPtr getOrCreateAggregateTypeDescriptorFor(const TypeMapperPtr &typeMapper)
+    {
+        auto it = valueTypeScanColorMap.find(typeMapper);
+        if(it != valueTypeScanColorMap.end())
+        {
+            auto currentColor = it->second;
+            assert(currentColor != ValueTypeScanColor::Black && "Recursive value types are not allowed.");
+            if(currentColor == ValueTypeScanColor::Gray)
+                abort();
+            
+            return typeDescriptorContext.getForTypeMapper(typeMapper);
+        }
+
+        // Scan the dependencies recursively.
+        valueTypeScanColorMap[typeMapper] = ValueTypeScanColor::Gray;
+        typeMapper->typeMapperDependenciesDo([&](const TypeMapperPtr &dependency) {
+            scanTypeMapperDependency(dependency);
+        });
+        
+        valueTypeScanColorMap[typeMapper] = ValueTypeScanColor::Black;
+
+        // Add the value type.
+        return typeDescriptorContext.addValueType(typeMapper);
+    }
+
+    TypeDescriptorPtr getOrCreateReferenceTypeDescriptorFor(const TypeMapperPtr &typeMapper)
+    {
+        abort();
+    }
+
+    void scanTypeMapperDependency(const TypeMapperPtr &typeMapper)
+    {
+        if(typeMapper->isAggregateType())
+            getOrCreateAggregateTypeDescriptorFor(typeMapper);
+        else if(typeMapper->isObjectType())
+            getOrCreateClusterFor(typeMapper);
+        else if(typeMapper->isReferenceType())
+            getOrCreateReferenceTypeDescriptorFor(typeMapper);
+    }
+
     SerializationClusterPtr getOrCreateClusterFor(const TypeMapperPtr &typeMapper)
     {
+        assert(typeMapper->isObjectType());
         auto it = typeMapperToClustersMap.find(typeMapper);
         if(it != typeMapperToClustersMap.end())
             return it->second;
@@ -1908,6 +2073,11 @@ private:
         newCluster->index = clusters.size();
         clusters.push_back(newCluster);
         typeMapperToClustersMap.insert(std::make_pair(typeMapper, newCluster));
+
+        typeMapper->typeMapperDependenciesDo([&](const TypeMapperPtr &dependency) {
+            scanTypeMapperDependency(dependency);
+        });
+
         return newCluster;
     }
 
@@ -1955,6 +2125,7 @@ private:
     void prepareForWriting()
     {
         objectCount = 0;
+        typeDescriptorContext.pushDataIntoBinaryBlob(binaryBlobBuilder);
         for(auto & cluster : clusters)
         {
             cluster->pushDataIntoBinaryBlob(binaryBlobBuilder);
@@ -1969,6 +2140,7 @@ private:
     BinaryBlobBuilder binaryBlobBuilder;
     size_t objectCount;
     std::vector<SerializationClusterPtr> clusters;
+    std::unordered_map<TypeMapperPtr, ValueTypeScanColor> valueTypeScanColorMap;
     std::unordered_map<TypeMapperPtr, SerializationClusterPtr> typeMapperToClustersMap;
 
     std::vector<ObjectMapperPtr> tracingStack;
@@ -2052,8 +2224,22 @@ private:
     {
         for(uint32_t i = 0; i < valueTypeCount; ++i)
         {
-            // TODO: Parse the value type count.
-            return false;
+            auto structureType = std::make_shared<StructureMaterializationTypeMapper> ();
+            uint16_t fieldCount;
+            if(!input->readUTF8_32_16(structureType->name) ||
+                !input->readUInt16(fieldCount))
+                return false;
+
+            structureType->fields.resize(fieldCount);
+            for(uint16_t fieldIndex = 0; fieldIndex < fieldCount; ++fieldIndex)
+            {
+                auto &field = structureType->fields[fieldIndex];
+                if(!field.readDescriptionWith(input))
+                    return false;
+            }
+
+            structureType->resolveTypeUsing(typeMapperRegistry->getTypeMapperWithName(structureType->getName()));
+            typeDescriptorContext.addValueType(structureType);
         }
         return true;
     }

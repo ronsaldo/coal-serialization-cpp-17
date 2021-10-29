@@ -52,6 +52,39 @@ struct TestStructure : public coal::SerializableStructureTag
     }
 };
 
+/**
+ * Sample nested structure with inline Coal serialization specs.
+ */
+struct TestNestedStructure : public coal::SerializableStructureTag
+{
+    typedef TestNestedStructure SelfType;
+
+    static constexpr char const __coal_typename__[] = "TestNestedStructure";
+
+    static coal::FieldDescriptions __coal_fields__()
+    {
+        return {
+            {"innerStruct", &SelfType::innerStruct},
+            {"integerField", &SelfType::integerField},
+        };
+    }
+
+    TestStructure innerStruct = {};
+    int integerField = 0;
+
+    bool operator==(const TestNestedStructure &other) const
+    {
+        return innerStruct == other.innerStruct
+            && integerField == other.integerField;
+    }
+
+    friend std::ostream &operator<<(std::ostream &out, const TestNestedStructure &value)
+    {
+        out << '{' << value.innerStruct << ", " << value.integerField << "}";
+        return out;
+    }
+};
+
 struct TestStructureWithDifferentOrder
 {
     int integerField = 0;
@@ -68,6 +101,27 @@ struct TestStructureWithDifferentOrder
     friend std::ostream &operator<<(std::ostream &out, const TestStructureWithDifferentOrder &value)
     {
         out << '{' << value.booleanField << ", " << value.integerField << ", " << value.floatField << "}";
+        return out;
+    }
+};
+
+/**
+ * Sample nested structure with inline Coal serialization specs.
+ */
+struct TestNestedStructureWithDifferentOrder
+{
+    int integerField = 0;
+    TestStructureWithDifferentOrder innerStruct = {};
+
+    bool operator==(const TestNestedStructureWithDifferentOrder &other) const
+    {
+        return innerStruct == other.innerStruct
+            && integerField == other.integerField;
+    }
+
+    friend std::ostream &operator<<(std::ostream &out, const TestNestedStructureWithDifferentOrder &value)
+    {
+        out << '{' << value.integerField << ", " << value.innerStruct << "}";
         return out;
     }
 };
@@ -91,6 +145,25 @@ struct StructureTypeMetadataFor<TestStructureWithDifferentOrder>
     static std::string getTypeName()
     {
         return "TestStructure";
+    }
+};
+
+template<>
+struct StructureTypeMetadataFor<TestNestedStructureWithDifferentOrder>
+{
+    typedef void type;
+
+    static FieldDescriptions getFields()
+    {
+        return {
+            {"integerField", &TestNestedStructureWithDifferentOrder::integerField},
+            {"innerStruct", &TestNestedStructureWithDifferentOrder::innerStruct},
+        };
+    }
+
+    static std::string getTypeName()
+    {
+        return "TestNestedStructure";
     }
 };
 
@@ -124,12 +197,19 @@ int main()
         // Empty
         assertEquals(TestStructure{}, coal::deserialize<TestStructure> (coal::serialize(TestStructure{})).value());
         assertEquals(TestStructureWithDifferentOrder{}, coal::deserialize<TestStructureWithDifferentOrder> (coal::serialize(TestStructureWithDifferentOrder{})).value());
+        assertEquals(TestNestedStructure{}, coal::deserialize<TestNestedStructure> (coal::serialize(TestNestedStructure{})).value());
+        assertEquals(TestNestedStructureWithDifferentOrder{}, coal::deserialize<TestNestedStructureWithDifferentOrder> (coal::serialize(TestNestedStructureWithDifferentOrder{})).value());
 
         assertEquals((TestStructure{{}, true, -42, 42.5f}), coal::deserialize<TestStructure> (coal::serialize(TestStructure{{}, true, -42, 42.5f})).value());
-        assertEquals((TestStructureWithDifferentOrder{-42, 42.5, true}), coal::deserialize<TestStructureWithDifferentOrder> (coal::serialize(TestStructureWithDifferentOrder{-42, 42.5, true})).value());
+        assertEquals((TestStructureWithDifferentOrder{-42, 42.5f, true}), coal::deserialize<TestStructureWithDifferentOrder> (coal::serialize(TestStructureWithDifferentOrder{-42, 42.5f, true})).value());
+        assertEquals((TestNestedStructure{{}, {{}, true, -42, 42.5f}, 13}), coal::deserialize<TestNestedStructure> (coal::serialize(TestNestedStructure{{}, {{}, true, -42, 42.5f}, 13})).value());
+        assertEquals((TestNestedStructureWithDifferentOrder{13, {-42, 42.5f, true}}), coal::deserialize<TestNestedStructureWithDifferentOrder> (coal::serialize(TestNestedStructureWithDifferentOrder{13, {-42, 42.5f, true}})).value());
 
         assertEquals((TestStructureWithDifferentOrder{-42, 42.5, true}), coal::deserialize<TestStructureWithDifferentOrder> (coal::serialize(TestStructure{{}, true, -42, 42.5f})).value());
         assertEquals((TestStructure{{}, true, -42, 42.5f}), coal::deserialize<TestStructure> (coal::serialize(TestStructureWithDifferentOrder{-42, 42.5, true})).value());
+
+        assertEquals((TestNestedStructureWithDifferentOrder{13, {-42, 42.5f, true}}), coal::deserialize<TestNestedStructureWithDifferentOrder> (coal::serialize(TestNestedStructure{{}, {{}, true, -42, 42.5f}, 13})).value());
+        assertEquals((TestNestedStructure{{}, {{}, true, -42, 42.5f}, 13}), coal::deserialize<TestNestedStructure> (coal::serialize(TestNestedStructureWithDifferentOrder{13, {-42, 42.5f, true}})).value());
     }
 
     if(testErrorCount > 0)

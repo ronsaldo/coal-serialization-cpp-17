@@ -2026,7 +2026,7 @@ private:
         if(it != valueTypeScanColorMap.end())
         {
             auto currentColor = it->second;
-            assert(currentColor != ValueTypeScanColor::Black && "Recursive value types are not allowed.");
+            assert(currentColor == ValueTypeScanColor::Black && "Recursive value types are not allowed.");
             if(currentColor == ValueTypeScanColor::Gray)
                 abort();
             

@@ -753,7 +753,7 @@ public:
     }
 
     uint32_t index = 0;
-    TypeMapperPtr typeMapper;
+    TypeMapperWeakPtr typeMapper;
 };
 
 
@@ -2198,7 +2198,7 @@ public:
         if(encoding->kind != TypeDescriptorKind::TypedObject)
             return false;
 
-        auto targetTypeMapper = std::static_pointer_cast<ObjectReferenceTypeDescriptor> (encoding)->typeMapper;
+        auto targetTypeMapper = std::static_pointer_cast<ObjectReferenceTypeDescriptor> (encoding)->typeMapper.lock();
         return targetTypeMapper && targetTypeMapper->getResolvedType() == typeMapperForType<ObjectType> ();
     }
 

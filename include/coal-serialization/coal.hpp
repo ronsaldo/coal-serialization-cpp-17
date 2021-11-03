@@ -389,9 +389,24 @@ public:
 
     void writeTypeDescriptorForTypeMapper(const TypeMapperPtr &typeMapper);
 
+    void setObjectPointerToIndexMap(const std::unordered_map<const void*, uint32_t> *map)
+    {
+        objectPointerToIndexMap = map;
+    }
+
+    void writeObjectPointerAsReference(const void *pointer)
+    {
+        auto it = objectPointerToIndexMap->find(pointer);
+        if(it != objectPointerToIndexMap->end())
+            writeUInt32(it->second + 1);
+        else
+            writeUInt32(0);
+    }
+
 private:
     const BinaryBlobBuilder *blob = nullptr;
     TypeDescriptorContext *typeDescriptorContext = nullptr;
+    const std::unordered_map<const void*, uint32_t> *objectPointerToIndexMap = nullptr;
 };
 
 /**
@@ -503,10 +518,29 @@ struct ReadStream
         binaryBlobSize = size;
     }
 
+    void setInstances(const std::vector<ObjectMapperPtr> *theInstances)
+    {
+        instances = theInstances;
+    }
+
+    bool readInstanceReference(ObjectMapperPtr &destination)
+    {
+        uint32_t index = 0;
+        if(!readUInt32(index) || index > instances->size())
+            return false;
+
+        if(index == 0)
+            destination.reset();
+        else
+            destination = (*instances)[index - 1];
+        return true;
+    }
+
 private:
     size_t binaryBlobSize;
     const uint8_t *binaryBlobData;
     TypeDescriptorContext *typeDescriptorContext = nullptr;
+    const std::vector<ObjectMapperPtr> *instances = nullptr;
 };
 
 /**
@@ -707,6 +741,23 @@ public:
 };
 
 /**
+ * Structure type descriptor
+ */
+class ObjectReferenceTypeDescriptor : public TypeDescriptor
+{
+public:
+    virtual void writeDescriptionWith(WriteStream *output) override
+    {
+        output->writeUInt8(uint8_t(kind));
+        output->writeUInt32(index);
+    }
+
+    uint32_t index = 0;
+    TypeMapperPtr typeMapper;
+};
+
+
+/**
  * TypeDescriptorContext
  */
 class TypeDescriptorContext
@@ -775,10 +826,39 @@ public:
                 descriptor = valueTypeDescriptors[structureIndex];
                 return true;
             }
+        
+        case TypeDescriptorKind::TypedObject:
+            {
+                uint32_t clusterIndex = 0;
+                if(!input->readUInt32(clusterIndex) || clusterIndex >= clusterTypes.size())
+                    return false;
+
+                descriptor = getOrCreateForTypedObjectReference(clusterTypes[clusterIndex]);
+                return true;
+            }
         default:
             // Unsupported type descriptor kind.
             return false;
         }
+    }
+
+    void addObjectTypeMapper(const TypeMapperPtr &typeMapper)
+    {
+        objectTypeToClusterIndexMap.insert({typeMapper, clusterTypes.size()});
+        clusterTypes.push_back(typeMapper);
+    }
+
+    TypeDescriptorPtr getOrCreateForTypedObjectReference(const TypeMapperPtr &objectType)
+    {
+        auto it = typedObjectReferenceCache.find(objectType);
+        if(it != typedObjectReferenceCache.end())
+            return it->second;
+        
+        auto descriptor = std::make_shared<ObjectReferenceTypeDescriptor> ();
+        descriptor->kind = TypeDescriptorKind::TypedObject;
+        descriptor->index = objectTypeToClusterIndexMap[objectType];
+        descriptor->typeMapper = objectType;
+        return descriptor;
     }
 
 private:
@@ -786,7 +866,11 @@ private:
 
     std::vector<TypeMapperPtr> valueTypes;
     std::vector<TypeDescriptorPtr> valueTypeDescriptors;
+
+    std::vector<TypeMapperPtr> clusterTypes;
+    std::unordered_map<TypeMapperPtr, uint32_t> objectTypeToClusterIndexMap;
     std::unordered_map<TypeMapperPtr, TypeDescriptorPtr> mapperToDescriptorMap;
+    std::unordered_map<TypeMapperPtr, TypeDescriptorPtr> typedObjectReferenceCache;
 };
 
 inline void WriteStream::writeTypeDescriptorForTypeMapper(const TypeMapperPtr &typeMapper)
@@ -847,6 +931,7 @@ struct MaterializationFieldDescription
 };
 
 typedef std::function<void (const TypeMapperPtr &)> TypeMapperIterationBlock;
+typedef std::function<void (const ObjectMapperPtr &)> ObjectReferenceIterationBlock;
 
 /**
  * Type mapper interface.
@@ -976,6 +1061,20 @@ public:
             aBlock(shared_from_this());
         typeMapperDependenciesDo(aBlock);
     }
+
+    virtual void objectReferencesInInstanceDo(void *instancePointer, std::unordered_map<void*, ObjectMapperPtr> *cache, const ObjectReferenceIterationBlock &aBlock)
+    {
+        (void)instancePointer;
+        (void)cache;
+        (void)aBlock;
+    }
+
+    virtual void objectReferencesInFieldDo(void *fieldPointer, std::unordered_map<void*, ObjectMapperPtr> *cache, const ObjectReferenceIterationBlock &aBlock)
+    {
+        (void)fieldPointer;
+        (void)cache;
+        (void)aBlock;
+    }
 };
 
 inline TypeDescriptorPtr TypeDescriptorContext::getForTypeMapper(const TypeMapperPtr &mapper)
@@ -1008,6 +1107,23 @@ inline void TypeDescriptorContext::writeValueTypeLayoutsWith(WriteStream *output
     }
 }
 
+/**
+ * Object mapper interface.
+ * I am an interface used for gluing different kinds of objects with serializer and deserializer.
+ */
+class ObjectMapper
+{
+public:
+    virtual ~ObjectMapper() {};
+
+    virtual TypeMapperPtr getTypeMapper() const = 0;
+    virtual void *getObjectBasePointer() = 0;
+    
+    virtual std::shared_ptr<void> asObjectSharedPointer()
+    {
+        return nullptr;
+    }
+};
 
 /**
  * Type mapper registry interface.
@@ -1159,9 +1275,8 @@ public:
             field.typeMapper.lock()->writeFieldWith(fieldPointer, output);
         }
     }
-    std::string name;
 
-    void typeMapperDependenciesDo(const TypeMapperIterationBlock &aBlock) override
+    virtual void typeMapperDependenciesDo(const TypeMapperIterationBlock &aBlock) override
     {
         for(auto &field : fields)
         {
@@ -1183,6 +1298,7 @@ protected:
         }
     }
 
+    std::string name;
     std::vector<FieldDescription> fields;
     std::unordered_map<std::string, size_t> fieldNameMap;
 
@@ -1237,6 +1353,23 @@ public:
         AggregateTypeMapper::typeMapperDependenciesDo(aBlock);
     }
 
+    virtual void objectReferencesInInstanceDo(void *instancePointer, std::unordered_map<void*, ObjectMapperPtr> *cache, const ObjectReferenceIterationBlock &aBlock) override
+    {
+        auto st = superType.lock();
+        if(st)
+            st->objectReferencesInInstanceDo(instancePointer, cache, aBlock);
+
+        for(auto &field : fields)
+        {
+            auto fieldType = field.typeMapper.lock();
+            if(fieldType)
+            {
+                auto fieldPointer = field.accessor->getPointerForBasePointer(instancePointer);
+                fieldType->objectReferencesInFieldDo(fieldPointer, cache, aBlock);
+            }
+        }
+    }
+
     TypeMapperWeakPtr superType;
     ObjectMapperFactory factory;
 };
@@ -1284,6 +1417,19 @@ public:
     {
         // This should not be reached.
         abort();
+    }
+
+    virtual void objectReferencesInFieldDo(void *baseFieldPointer, std::unordered_map<void*, ObjectMapperPtr> *cache, const ObjectReferenceIterationBlock &aBlock) override
+    {
+        for(auto &field : fields)
+        {
+            auto fieldType = field.typeMapper.lock();
+            if(fieldType)
+            {
+                auto fieldPointer = field.accessor->getPointerForBasePointer(baseFieldPointer);
+                fieldType->objectReferencesInFieldDo(fieldPointer, cache, aBlock);
+            }
+        }
     }
 };
 
@@ -1354,6 +1500,13 @@ public:
 
         // Set the resolved type. 
         resolvedType = newResolveType;
+
+    }
+
+    void resolveTypeFields()
+    {
+        if(!resolvedType)
+            return;
 
         // Attempt to match the different fields.
         for(auto &serializedField : fields)
@@ -1495,8 +1648,9 @@ inline TypeMapperPtr typeMapperForType()
 template<typename T>
 struct SingletonTypeMapperFor
 {
-    static constexpr bool isObjectType = T::isObjectType;
-    static constexpr bool isValueType = !isObjectType;
+    static constexpr bool IsObjectType = T::IsObjectType;
+    static constexpr bool IsReferenceType = T::IsReferenceType;
+    static constexpr bool IsValueType = !IsObjectType && !IsReferenceType;
 
     static TypeMapperPtr apply()
     {
@@ -1515,7 +1669,8 @@ public:
     typedef NumericPrimitiveTypeMapper<FT, TDK> ThisType;
 
     static constexpr TypeDescriptorKind EncodingDescriptorKind = TDK;
-    static constexpr bool isObjectType = false;
+    static constexpr bool IsObjectType = false;
+    static constexpr bool IsReferenceType = false;
 
     static TypeMapperPtr uniqueInstance()
     {
@@ -1774,8 +1929,9 @@ struct ReflectedStructureTypeMapperFor
 {
     typedef StructureTypeMetadataFor<T> Metadata;
 
-    static constexpr bool isObjectType = false;
-    static constexpr bool isValueType = true;
+    static constexpr bool IsObjectType = false;
+    static constexpr bool IsReferenceType = false;
+    static constexpr bool IsValueType = true;
 
     static TypeMapperPtr apply()
     {
@@ -1803,8 +1959,9 @@ struct ReflectedClassTypeMapperFor
 {
     typedef ClassTypeMetadataFor<T> Metadata;
 
-    static constexpr bool isObjectType = true;
-    static constexpr bool isValueType = false;
+    static constexpr bool IsObjectType = true;
+    static constexpr bool IsReferenceType = false;
+    static constexpr bool IsValueType = false;
 
     static TypeMapperPtr apply()
     {
@@ -1821,18 +1978,6 @@ struct ReflectedClassTypeMapperFor
 template<typename T>
 struct TypeMapperFor<T, typename ClassTypeMetadataFor<T>::type> : ReflectedClassTypeMapperFor<T> {};
 
-/**
- * Object mapper interface.
- * I am an interface used for gluing different kinds of objects with serializer and deserializer.
- */
-class ObjectMapper
-{
-public:
-    virtual ~ObjectMapper() {};
-
-    virtual TypeMapperPtr getTypeMapper() const = 0;
-    virtual void *getObjectBasePointer() = 0;
-};
 
 /**
  * I am an accessor for a member field.
@@ -1895,8 +2040,9 @@ public:
         return singleton;
     }
 
-    static ObjectMapperPtr makeFor(const ValueType &value)
+    static ObjectMapperPtr makeFor(std::unordered_map<void *, ObjectMapperPtr> *cache, const ValueType &value)
     {
+        (void)cache;
         return std::make_shared<ThisType> (value);
     }
 
@@ -1945,6 +2091,20 @@ public:
         return std::make_shared<ThisType> (value);
     }
 
+    static ObjectMapperPtr makeFor(std::unordered_map<void *, ObjectMapperPtr> *cache, const ValueTypePtr &value)
+    {
+        if(!value)
+            return nullptr;
+
+        auto it = cache->find(value.get());
+        if(it != cache->end())
+            return it->second;
+
+        auto result = makeFor(value);
+        cache->insert({value.get(), result});
+        return result;
+    }
+
     static std::optional<ValueTypePtr> unwrapDeserializedRootObjectOrValue(const ObjectMapperPtr &deserializedRootObject)
     {
         if(!deserializedRootObject)
@@ -1961,6 +2121,11 @@ public:
     virtual void *getObjectBasePointer() override
     {
         return reinterpret_cast<void*> (reference.get());
+    }
+
+    virtual std::shared_ptr<void> asObjectSharedPointer() override
+    {
+        return reference;
     }
 
     ValueTypePtr reference;
@@ -1982,6 +2147,109 @@ ObjectMapperPtr makeNewSharedObject()
 {
     return makeSharedObjectWrapperFor<T> (std::make_shared<T> ());
 }
+
+/**
+ * std::shared_ptr reference type mapper.
+ */
+template<typename OT>
+class SharedPtrTypeMapperFor : public PrimitiveTypeMapper
+{
+public:
+    typedef OT ObjectType;
+    typedef std::shared_ptr<OT> ObjectTypePtr;
+    typedef SharedPtrTypeMapperFor<OT> ThisType;
+
+    static constexpr bool IsObjectType = false;
+    static constexpr bool IsReferenceType = true;
+
+    static TypeMapperPtr uniqueInstance()
+    {
+        static auto singleton = std::make_shared<ThisType> ();
+        return singleton;
+    }
+
+    SharedPtrTypeMapperFor()
+    {
+        name = typeDescriptorKindToString(TypeDescriptorKind::TypedObject);
+    }
+
+    virtual bool isSerializationDependencyType() const
+    {
+        return true;
+    }
+
+    virtual bool isReferenceType() const override
+    {
+        return true;
+    }
+
+    virtual void writeFieldWith(void *fieldPointer, WriteStream *output) override
+    {
+        auto objectPointer = reinterpret_cast<ObjectTypePtr*> (fieldPointer);
+        output->writeObjectPointerAsReference(objectPointer->get());
+    }
+
+    virtual bool canReadFieldWithTypeDescriptor(const TypeDescriptorPtr &encoding) const
+    {
+        // Untyped object.
+        if(encoding->kind == TypeDescriptorKind::Object)
+            return true;
+            
+        if(encoding->kind != TypeDescriptorKind::TypedObject)
+            return false;
+
+        auto targetTypeMapper = std::static_pointer_cast<ObjectReferenceTypeDescriptor> (encoding)->typeMapper;
+        return targetTypeMapper && targetTypeMapper->getResolvedType() == typeMapperForType<ObjectType> ();
+    }
+
+    virtual bool readFieldWith(void *fieldPointer, const TypeDescriptorPtr &fieldEncoding, ReadStream *input)
+    {
+        ObjectMapperPtr instance;
+        if(!input->readInstanceReference(instance))
+            return false;
+
+        auto destination = reinterpret_cast<ObjectTypePtr*> (fieldPointer);
+        destination->reset();
+        if(!instance)
+            return true;
+
+        // Check the validity of the cast.
+        if(fieldEncoding->kind == TypeDescriptorKind::Object)
+        {
+            // TODO: Check for a super type here.
+            if(instance->getTypeMapper() != typeMapperForType<ObjectType> ())
+                return true;
+        }
+
+        // Cast the instance.
+        *destination = std::reinterpret_pointer_cast<ObjectType> (instance->asObjectSharedPointer());
+        return true;
+    }
+
+    virtual void typeMapperDependenciesDo(const TypeMapperIterationBlock &aBlock) override
+    {
+        aBlock(typeMapperForType<ObjectType> ());
+    }
+
+    TypeDescriptorPtr getOrCreateTypeDescriptor(TypeDescriptorContext *context)
+    {
+        return context->getOrCreateForTypedObjectReference(typeMapperForType<ObjectType> ());
+    }
+
+    virtual void objectReferencesInFieldDo(void *baseFieldPointer, std::unordered_map<void*, ObjectMapperPtr> *cache, const ObjectReferenceIterationBlock &aBlock) override
+    {
+        auto referencePointer = reinterpret_cast<ObjectTypePtr*> (baseFieldPointer);
+        if(!*referencePointer)
+            return;
+
+        auto wrapper = SharedObjectWrapper<ObjectType>::makeFor(cache, *referencePointer);
+        aBlock(wrapper);
+    }
+};
+
+template<typename T>
+struct TypeMapperFor<std::shared_ptr<T>> : SingletonTypeMapperFor<SharedPtrTypeMapperFor<T>> {};
+
 
 template<typename T>
 struct ClassTypeMetadataFor<T, typename std::enable_if< std::is_base_of<SerializableSharedObjectClassTag, T>::value >::type>
@@ -2011,13 +2279,13 @@ template<typename T, typename C=void>
 struct ObjectMapperClassFor;
 
 template<typename T>
-struct ObjectMapperClassFor<T, typename std::enable_if<TypeMapperFor<T>::isValueType>::type>
+struct ObjectMapperClassFor<T, typename std::enable_if<TypeMapperFor<T>::IsValueType>::type>
 {
     typedef RootValueBox<T> type;
 };
 
 template<typename T>
-struct ObjectMapperClassFor<std::shared_ptr<T>, typename std::enable_if<TypeMapperFor<T>::isObjectType>::type>
+struct ObjectMapperClassFor<std::shared_ptr<T>, typename std::enable_if<TypeMapperFor<T>::IsObjectType>::type>
 {
     typedef SharedObjectWrapper<T> type;
 };
@@ -2086,7 +2354,7 @@ public:
     template<typename ROT>
     void serializeRootObjectOrValue(ROT &&root)
     {
-        serializeRootObject(ObjectMapperClassFor<ROT>::type::makeFor(root));
+        serializeRootObject(ObjectMapperClassFor<ROT>::type::makeFor(&objectPointerToMapperMap, root));
     }
 
     void serializeRootObject(const ObjectMapperPtr &object)
@@ -2136,6 +2404,10 @@ private:
         auto typeMapper = object->getTypeMapper();
         auto cluster = getOrCreateClusterFor(typeMapper);
         cluster->addObject(object);
+
+        typeMapper->objectReferencesInInstanceDo(object->getObjectBasePointer(), &objectPointerToMapperMap, [&](const ObjectMapperPtr &reference) {
+            addPendingObject(reference);
+        });
     }
 
     TypeDescriptorPtr getOrCreateAggregateTypeDescriptorFor(const TypeMapperPtr &typeMapper)
@@ -2163,19 +2435,25 @@ private:
         return typeDescriptorContext.addValueType(typeMapper);
     }
 
-    TypeDescriptorPtr getOrCreateReferenceTypeDescriptorFor(const TypeMapperPtr &typeMapper)
+    void scanReferenceTypeDependencies(const TypeMapperPtr &typeMapper)
     {
-        abort();
+        if(scannedReferenceType.find(typeMapper) == scannedReferenceType.end())
+            return;
+
+        scannedReferenceType.insert(typeMapper);
+        typeMapper->typeMapperDependenciesDo([&](const TypeMapperPtr &dependency) {
+            scanTypeMapperDependency(dependency);
+        });
     }
 
     void scanTypeMapperDependency(const TypeMapperPtr &typeMapper)
     {
-        if(typeMapper->isAggregateType())
-            getOrCreateAggregateTypeDescriptorFor(typeMapper);
-        else if(typeMapper->isObjectType())
+        if(typeMapper->isObjectType())
             getOrCreateClusterFor(typeMapper);
+        else if(typeMapper->isAggregateType())
+            getOrCreateAggregateTypeDescriptorFor(typeMapper);
         else if(typeMapper->isReferenceType())
-            getOrCreateReferenceTypeDescriptorFor(typeMapper);
+            scanReferenceTypeDependencies(typeMapper);
     }
 
     SerializationClusterPtr getOrCreateClusterFor(const TypeMapperPtr &typeMapper)
@@ -2237,7 +2515,7 @@ private:
 
     void writeTrailerForObject(const ObjectMapperPtr &rootObject)
     {
-        output->writeUInt32(objectToInstanceIndexTable[rootObject] + 1);
+        output->writeUInt32(objectPointerToInstanceIndexTable[rootObject->getObjectBasePointer()] + 1);
     }
 
     void prepareForWriting()
@@ -2247,9 +2525,12 @@ private:
         for(auto & cluster : clusters)
         {
             cluster->pushDataIntoBinaryBlob(binaryBlobBuilder);
+            typeDescriptorContext.addObjectTypeMapper(cluster->typeMapper);
             for(auto instance : cluster->instances)
-                objectToInstanceIndexTable[instance] = objectCount++;
+                objectPointerToInstanceIndexTable.insert({instance->getObjectBasePointer(), objectCount++});
         }
+
+        output->setObjectPointerToIndexMap(&objectPointerToInstanceIndexTable);
     }
 
     WriteStream *output;
@@ -2260,10 +2541,12 @@ private:
     std::vector<SerializationClusterPtr> clusters;
     std::unordered_map<TypeMapperPtr, ValueTypeScanColor> valueTypeScanColorMap;
     std::unordered_map<TypeMapperPtr, SerializationClusterPtr> typeMapperToClustersMap;
+    std::unordered_set<TypeMapperPtr> scannedReferenceType;
 
     std::vector<ObjectMapperPtr> tracingStack;
     std::unordered_set<ObjectMapperPtr> seenSet;
-    std::unordered_map<ObjectMapperPtr, size_t> objectToInstanceIndexTable;
+    std::unordered_map<void *, ObjectMapperPtr> objectPointerToMapperMap;
+    std::unordered_map<const void *, uint32_t> objectPointerToInstanceIndexTable;
 };
 
 /**
@@ -2357,6 +2640,7 @@ private:
             }
 
             structureType->resolveTypeUsing(typeMapperRegistry->getTypeMapperWithName(structureType->getName()));
+            structureType->resolveTypeFields();
             typeDescriptorContext.addValueType(structureType);
         }
         return true;
@@ -2367,7 +2651,10 @@ private:
         // Pre-allocate the cluster types.
         clusterTypes.reserve(clusterCount);
         for(uint32_t i = 0; i < clusterCount; ++i)
+        {
             clusterTypes.push_back(std::make_shared<ObjectMaterializationTypeMapper> ());
+            typeDescriptorContext.addObjectTypeMapper(clusterTypes.back());
+        }
 
         // Parse the clusters.
         clusterInstanceCount.reserve(clusterCount);
@@ -2410,6 +2697,9 @@ private:
         for(auto &type : clusterTypes)
             type->resolveTypeUsing(typeMapperRegistry->getTypeMapperWithName(type->getName()));
 
+        for(auto &type : clusterTypes)
+            type->resolveTypeFields();
+
         return true;
     }
 
@@ -2424,6 +2714,7 @@ private:
             for(uint32_t j = 0; j < instanceCount; ++j)
                 instances.push_back(clusterType->makeInstance());
         }
+        input->setInstances(&instances);
 
         // Parse the instance data.
         uint32_t nextInstanceIndex = 0;

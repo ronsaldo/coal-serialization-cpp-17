@@ -163,6 +163,42 @@ public:
     }
 };
 
+/**
+ * TestSharedObjectOuter
+ */
+class TestSharedObjectOuter : public coal::SerializableSharedObjectClassTag
+{
+public:
+    typedef TestSharedObjectOuter SelfType;
+
+    static constexpr char const __coal_typename__[] = "TestSharedObjectOuter";
+
+    static coal::FieldDescriptions __coal_fields__()
+    {
+        return {
+            {"innerObject", &SelfType::innerObject},
+        };
+    }
+
+    std::shared_ptr<TestSharedObject> innerObject;
+
+    bool operator==(const TestSharedObjectOuter &other) const
+    {
+        return bool(innerObject) == bool(other.innerObject) && (!innerObject || *innerObject == *other.innerObject);
+    }
+
+    friend std::ostream &operator<<(std::ostream &out, const TestSharedObjectOuter &object)
+    {
+        out << '{';
+        if(object.innerObject)
+            out << *object.innerObject;
+        else
+            out << "nullptr";
+        out << "}";
+        return out;
+    }
+};
+
 namespace coal
 {
 template<>
@@ -265,6 +301,28 @@ int main()
         
         auto serialized = coal::serialize(object);
         auto materializedObject = coal::deserialize<std::shared_ptr<TestSharedObject>> (serialized).value();
+        assertEquals(*object, *materializedObject);
+    }
+
+    // TestSharedObjectOuter empty
+    {
+        auto object = std::make_shared<TestSharedObjectOuter> ();
+        auto serialized = coal::serialize(object);
+        auto materializedObject = coal::deserialize<std::shared_ptr<TestSharedObjectOuter>> (serialized).value();
+        assertEquals(*object, *materializedObject);
+    }
+
+    // TestSharedObjectOuter non empty
+    {
+        auto innerObject = std::make_shared<TestSharedObject> ();
+        innerObject->booleanField = true;
+        innerObject->integerField = -42;
+        innerObject->floatField = 42.5f;
+
+        auto object = std::make_shared<TestSharedObjectOuter> ();
+        object->innerObject = innerObject;
+        auto serialized = coal::serialize(object);
+        auto materializedObject = coal::deserialize<std::shared_ptr<TestSharedObjectOuter>> (serialized).value();
         assertEquals(*object, *materializedObject);
     }
 

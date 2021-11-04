@@ -284,6 +284,28 @@ public:
     }
 };
 
+/**
+ * TestSharedCyclicObject
+ */
+class TestSharedCyclicObject : public coal::SerializableSharedObjectClassTag
+{
+public:
+    typedef TestSharedCyclicObject SelfType;
+
+    static constexpr char const __coal_typename__[] = "TestSharedCyclicObject";
+
+    static coal::FieldDescriptions __coal_fields__()
+    {
+        return {
+            {"potentiallyCyclicReference", &SelfType::potentiallyCyclicReference},
+            {"potentiallyCyclicReference2", &SelfType::potentiallyCyclicReference2},
+        };
+    }
+
+    std::shared_ptr<TestSharedCyclicObject> potentiallyCyclicReference;
+    std::shared_ptr<TestSharedCyclicObject> potentiallyCyclicReference2;
+};
+
 namespace coal
 {
 template<>
@@ -431,6 +453,51 @@ int main()
         auto materializedObject = coal::deserialize<std::shared_ptr<TestSharedObjectOuter>> (serialized).value();
         assertEquals(*object, *materializedObject);
     }
+
+    // TestSharedCyclicObject no cycle
+    {
+        auto noCycle = std::make_shared<TestSharedCyclicObject> ();
+        auto serialized = coal::serialize(noCycle);
+        auto materializedObject = coal::deserialize<std::shared_ptr<TestSharedCyclicObject>> (serialized).value();
+        assertEquals(nullptr, materializedObject->potentiallyCyclicReference);
+        assertEquals(nullptr, materializedObject->potentiallyCyclicReference2);
+    }
+
+    // TestSharedCyclicObject self cycle
+    {
+        auto noCycle = std::make_shared<TestSharedCyclicObject> ();
+        noCycle->potentiallyCyclicReference = noCycle;
+
+        auto serialized = coal::serialize(noCycle);
+        auto materializedObject = coal::deserialize<std::shared_ptr<TestSharedCyclicObject>> (serialized).value();
+        assertEquals(materializedObject, materializedObject->potentiallyCyclicReference);
+        assertEquals(nullptr, materializedObject->potentiallyCyclicReference2);
+
+        noCycle->potentiallyCyclicReference.reset();
+        materializedObject->potentiallyCyclicReference.reset();
+    }
+
+    // TestSharedCyclicObject indirect cycle
+    {
+        auto first = std::make_shared<TestSharedCyclicObject> ();
+        auto second = std::make_shared<TestSharedCyclicObject> ();
+        first->potentiallyCyclicReference = second;
+        second->potentiallyCyclicReference = first;
+        second->potentiallyCyclicReference2 = second;
+
+        auto serialized = coal::serialize(first);
+        auto materializedObject = coal::deserialize<std::shared_ptr<TestSharedCyclicObject>> (serialized).value();
+        auto materializedSecondObject = materializedObject->potentiallyCyclicReference;
+        assertEquals(materializedObject, materializedSecondObject->potentiallyCyclicReference);
+        assertEquals(materializedSecondObject, materializedSecondObject->potentiallyCyclicReference2);
+
+        second->potentiallyCyclicReference.reset();
+        second->potentiallyCyclicReference2.reset();
+
+        materializedSecondObject->potentiallyCyclicReference.reset();
+        materializedSecondObject->potentiallyCyclicReference2.reset();
+    }
+    
 
     if(testErrorCount > 0)
         std::cerr << testErrorCount << " test failures" << std::endl;

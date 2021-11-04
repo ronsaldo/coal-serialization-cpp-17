@@ -836,6 +836,43 @@ public:
                 descriptor = getOrCreateForTypedObjectReference(clusterTypes[clusterIndex]);
                 return true;
             }
+
+        case TypeDescriptorKind::Array8:
+        case TypeDescriptorKind::Array16:
+        case TypeDescriptorKind::Array32:
+            {
+                TypeDescriptorPtr elementTypeDescriptor;
+                if(!readTypeDescriptorWith(elementTypeDescriptor, input))
+                    return false;
+
+                descriptor = getOrCreateArrayTypeDescriptor(kind, elementTypeDescriptor);
+                return true;
+            }
+
+        case TypeDescriptorKind::Set8:
+        case TypeDescriptorKind::Set16:
+        case TypeDescriptorKind::Set32:
+            {
+                TypeDescriptorPtr elementTypeDescriptor;
+                if(!readTypeDescriptorWith(elementTypeDescriptor, input))
+                    return false;
+
+                descriptor = getOrCreateSetTypeDescriptor(kind, elementTypeDescriptor);
+                return true;
+            }
+
+        case TypeDescriptorKind::Map8:
+        case TypeDescriptorKind::Map16:
+        case TypeDescriptorKind::Map32:
+            {
+                TypeDescriptorPtr keyTypeDescriptor;
+                TypeDescriptorPtr valueTypeDescriptor;
+                if(!readTypeDescriptorWith(keyTypeDescriptor, input) || !readTypeDescriptorWith(valueTypeDescriptor, input))
+                    return false;
+
+                descriptor = getOrCreateMapTypeDescriptor(kind, keyTypeDescriptor, valueTypeDescriptor);
+                return true;
+            }
         default:
             // Unsupported type descriptor kind.
             return false;
@@ -861,6 +898,46 @@ public:
         return descriptor;
     }
 
+    TypeDescriptorPtr getOrCreateArrayTypeDescriptor(TypeDescriptorKind kind, const TypeDescriptorPtr &elementType)
+    {
+        auto it = arrayTypeDescriptorCache.find({kind, elementType});
+        if(it != arrayTypeDescriptorCache.end())
+            return it->second;
+        
+        auto descriptor = std::make_shared<ArrayTypeDescriptor> ();
+        descriptor->kind = kind;
+        descriptor->element = elementType;
+        arrayTypeDescriptorCache.insert({{kind, elementType}, descriptor});
+        return descriptor;
+    }
+
+    TypeDescriptorPtr getOrCreateSetTypeDescriptor(TypeDescriptorKind kind, const TypeDescriptorPtr &elementType)
+    {
+        auto it = setTypeDescriptorCache.find({kind, elementType});
+        if(it != setTypeDescriptorCache.end())
+            return it->second;
+        
+        auto descriptor = std::make_shared<SetTypeDescriptor> ();
+        descriptor->kind = kind;
+        descriptor->element = elementType;
+        setTypeDescriptorCache.insert({{kind, elementType}, descriptor});
+        return descriptor;
+    }
+
+    TypeDescriptorPtr getOrCreateMapTypeDescriptor(TypeDescriptorKind kind, const TypeDescriptorPtr &keyType, const TypeDescriptorPtr &valueType)
+    {
+        auto it = mapTypeDescriptorCache.find({kind, {keyType, valueType}});
+        if(it != mapTypeDescriptorCache.end())
+            return it->second;
+        
+        auto descriptor = std::make_shared<MapTypeDescriptor> ();
+        descriptor->kind = kind;
+        descriptor->key = keyType;
+        descriptor->value = valueType;
+        mapTypeDescriptorCache.insert({{kind, {keyType, valueType}}, descriptor});
+        return descriptor;
+    }
+
 private:
     std::array<TypeDescriptorPtr, uint8_t(TypeDescriptorKind::PrimitiveTypeDescriptorCount)> primitiveTypeDescriptors;
 
@@ -871,6 +948,9 @@ private:
     std::unordered_map<TypeMapperPtr, uint32_t> objectTypeToClusterIndexMap;
     std::unordered_map<TypeMapperPtr, TypeDescriptorPtr> mapperToDescriptorMap;
     std::unordered_map<TypeMapperPtr, TypeDescriptorPtr> typedObjectReferenceCache;
+    std::map<std::pair<TypeDescriptorKind, TypeDescriptorPtr>, TypeDescriptorPtr> arrayTypeDescriptorCache;
+    std::map<std::pair<TypeDescriptorKind, TypeDescriptorPtr>, TypeDescriptorPtr> setTypeDescriptorCache;
+    std::map<std::pair<TypeDescriptorKind, std::pair<TypeDescriptorPtr, TypeDescriptorPtr>>, TypeDescriptorPtr> mapTypeDescriptorCache;
 };
 
 inline void WriteStream::writeTypeDescriptorForTypeMapper(const TypeMapperPtr &typeMapper)
@@ -1008,6 +1088,18 @@ public:
         (void)fieldPointer;
         (void)output;
         abort();
+    }
+
+    virtual void pushFieldDataIntoBinaryBlob(void *fieldPointer, BinaryBlobBuilder &binaryBlobBuilder)
+    {
+        (void)fieldPointer;
+        (void)binaryBlobBuilder;
+    }
+
+    virtual void pushInstanceDataIntoBinaryBlob(void *instancePointer, BinaryBlobBuilder &binaryBlobBuilder)
+    {
+        (void)instancePointer;
+        (void)binaryBlobBuilder;
     }
 
     virtual bool canReadFieldWithTypeDescriptor(const TypeDescriptorPtr &encoding) const
@@ -1276,6 +1368,15 @@ public:
         }
     }
 
+    virtual void pushInstanceDataIntoBinaryBlob(void *instancePointer, BinaryBlobBuilder &binaryBlobBuilder)
+    {
+        for(auto &field : fields)
+        {
+            auto fieldPointer = field.accessor->getPointerForBasePointer(instancePointer);
+            field.typeMapper.lock()->pushFieldDataIntoBinaryBlob(fieldPointer, binaryBlobBuilder);
+        }
+    }
+
     virtual void typeMapperDependenciesDo(const TypeMapperIterationBlock &aBlock) override
     {
         for(auto &field : fields)
@@ -1392,6 +1493,11 @@ public:
     virtual void writeFieldWith(void *fieldPointer, WriteStream *output)
     {
         writeInstanceWith(fieldPointer, output);
+    }
+
+    virtual void pushFieldDataIntoBinaryBlob(void *fieldPointer, BinaryBlobBuilder &binaryBlobBuilder)
+    {
+        pushInstanceDataIntoBinaryBlob(fieldPointer, binaryBlobBuilder);
     }
 
     virtual bool canReadFieldWithTypeDescriptor(const TypeDescriptorPtr &encoding) const
@@ -1898,6 +2004,453 @@ template<>
 struct TypeMapperFor<double> : SingletonTypeMapperFor<NumericPrimitiveTypeMapper<double, TypeDescriptorKind::Float64>> {};
 
 /**
+ * std::string type mapper.
+ */
+class StdStringTypeMapper : public PrimitiveTypeMapper
+{
+public:
+    static constexpr bool IsObjectType = false;
+    static constexpr bool IsReferenceType = false;
+
+    static TypeMapperPtr uniqueInstance()
+    {
+        static auto singleton = std::make_shared<StdStringTypeMapper> ();
+        return singleton;
+    }
+
+    StdStringTypeMapper()
+    {
+        name = typeDescriptorKindToString(TypeDescriptorKind::UTF8_32_32);
+    }
+
+    virtual void writeFieldWith(void *fieldPointer, WriteStream *output) override
+    {
+        auto string = reinterpret_cast<std::string*> (fieldPointer);
+        output->writeUTF8_32_32(*string);
+    }
+
+    virtual void pushFieldDataIntoBinaryBlob(void *fieldPointer, BinaryBlobBuilder &binaryBlobBuilder)
+    {
+        auto string = reinterpret_cast<std::string*> (fieldPointer);
+        binaryBlobBuilder.internString32(*string);
+    }
+
+    virtual bool canReadFieldWithTypeDescriptor(const TypeDescriptorPtr &encoding) const
+    {
+        switch(encoding->kind)
+        {
+        case TypeDescriptorKind::UTF8_32_8:
+        case TypeDescriptorKind::UTF8_32_16:
+        case TypeDescriptorKind::UTF8_32_32:
+            return true;
+        default:
+            return false;
+        }
+    }
+
+    virtual bool readFieldWith(void *fieldPointer, const TypeDescriptorPtr &fieldEncoding, ReadStream *input)
+    {
+        auto destination = reinterpret_cast<std::string*> (fieldPointer);
+
+        switch(fieldEncoding->kind)
+        {
+        case TypeDescriptorKind::UTF8_32_8:
+            return input->readUTF8_32_8(*destination);
+        case TypeDescriptorKind::UTF8_32_16:
+            return input->readUTF8_32_16(*destination);
+        case TypeDescriptorKind::UTF8_32_32:
+            return input->readUTF8_32_32(*destination);
+        default:
+            return false;
+        }
+    }
+
+    TypeDescriptorPtr getOrCreateTypeDescriptor(TypeDescriptorContext *context)
+    {
+        return context->getOrCreatePrimitiveTypeDescriptor(TypeDescriptorKind::UTF8_32_32);
+    }
+};
+
+template<>
+struct TypeMapperFor<std::string> : SingletonTypeMapperFor<StdStringTypeMapper> {};
+
+/**
+ * std::vector type mapper.
+ */
+template<typename ET>
+class StdVectorTypeMapper : public PrimitiveTypeMapper
+{
+public:
+    static constexpr bool IsObjectType = false;
+    static constexpr bool IsReferenceType = false;
+
+    typedef StdVectorTypeMapper<ET> ThisType;
+
+    static TypeMapperPtr uniqueInstance()
+    {
+        static auto singleton = std::make_shared<ThisType> ();
+        return singleton;
+    }
+
+    StdVectorTypeMapper()
+    {
+        name = typeDescriptorKindToString(TypeDescriptorKind::Array32);
+    }
+
+    virtual void writeFieldWith(void *fieldPointer, WriteStream *output) override
+    {
+        auto &vector = *reinterpret_cast<std::vector<ET>*> (fieldPointer);
+        output->writeUInt32(vector.size());
+        auto elementType = typeMapperForType<ET> ();
+        for(auto &element : vector)
+            elementType->writeFieldWith(&element, output);
+    }
+
+    virtual void pushFieldDataIntoBinaryBlob(void *fieldPointer, BinaryBlobBuilder &binaryBlobBuilder)
+    {
+        auto &vector = *reinterpret_cast<std::vector<ET>*> (fieldPointer);
+        auto elementType = typeMapperForType<ET> ();
+        for(auto &element : vector)
+            elementType->pushFieldDataIntoBinaryBlob(&element, binaryBlobBuilder);
+    }
+
+    virtual bool canReadFieldWithTypeDescriptor(const TypeDescriptorPtr &encoding) const
+    {
+        switch(encoding->kind)
+        {
+        case TypeDescriptorKind::Array8:
+        case TypeDescriptorKind::Array16:
+        case TypeDescriptorKind::Array32:
+            {
+                auto targetTypeMapper = typeMapperForType<ET> ();
+                auto elementTypeDescriptor = std::static_pointer_cast<ArrayTypeDescriptor> (encoding)->element;
+                return targetTypeMapper->canReadFieldWithTypeDescriptor(elementTypeDescriptor);
+            }
+        default:
+            return false;
+        }
+    }
+
+    virtual bool readFieldWith(void *fieldPointer, const TypeDescriptorPtr &fieldEncoding, ReadStream *input)
+    {
+        auto &destination = *reinterpret_cast<std::vector<ET>*> (fieldPointer);
+
+        switch(fieldEncoding->kind)
+        {
+        case TypeDescriptorKind::Array8:
+            {
+                uint8_t count = 0;
+                if(!input->readUInt8(count))
+                    return false;
+                destination.resize(count);
+            }
+            break;
+        case TypeDescriptorKind::Array16:
+            {
+                uint16_t count = 0;
+                if(!input->readUInt16(count))
+                    return false;
+                destination.resize(count);
+            }
+            break;
+        case TypeDescriptorKind::Array32:
+            {
+                uint32_t count = 0;
+                if(!input->readUInt32(count))
+                    return false;
+                destination.resize(count);
+            }
+            break;
+        default:
+            return false;
+        }
+
+        auto targetTypeMapper = typeMapperForType<ET> ();
+        auto elementTypeDescriptor = std::static_pointer_cast<ArrayTypeDescriptor> (fieldEncoding)->element;
+        for(size_t i = 0; i < destination.size(); ++i)
+        {
+            auto elementFieldPointer = &destination[i];
+            if(!targetTypeMapper->readFieldWith(elementFieldPointer, elementTypeDescriptor, input))
+                return false;
+        }
+
+        return true;
+    }
+
+    TypeDescriptorPtr getOrCreateTypeDescriptor(TypeDescriptorContext *context)
+    {
+        return context->getOrCreateArrayTypeDescriptor(TypeDescriptorKind::Array32, 
+            context->getForTypeMapper(typeMapperForType<ET> ())
+        );
+    }
+};
+
+template<typename ET>
+struct TypeMapperFor<std::vector<ET>> : SingletonTypeMapperFor<StdVectorTypeMapper<ET>> {};
+
+/**
+ * std::(unordered_)set type mapper.
+ */
+template<typename CT>
+class StdSetTypeMapper : public PrimitiveTypeMapper
+{
+public:
+    static constexpr bool IsObjectType = false;
+    static constexpr bool IsReferenceType = false;
+
+    typedef CT ContainerType;
+    typedef typename CT::value_type ElementType;
+    typedef StdSetTypeMapper<CT> ThisType;
+
+    static TypeMapperPtr uniqueInstance()
+    {
+        static auto singleton = std::make_shared<ThisType> ();
+        return singleton;
+    }
+
+    StdSetTypeMapper()
+    {
+        name = typeDescriptorKindToString(TypeDescriptorKind::Set32);
+    }
+
+    virtual void writeFieldWith(void *fieldPointer, WriteStream *output) override
+    {
+        auto &set = *reinterpret_cast<ContainerType*> (fieldPointer);
+        output->writeUInt32(set.size());
+        auto elementType = typeMapperForType<ElementType> ();
+        for(auto &element : set)
+            elementType->writeFieldWith(const_cast<void*> (static_cast<const void*> (&element)), output);
+    }
+
+    virtual void pushFieldDataIntoBinaryBlob(void *fieldPointer, BinaryBlobBuilder &binaryBlobBuilder)
+    {
+        auto &set = *reinterpret_cast<ContainerType*> (fieldPointer);
+        auto elementType = typeMapperForType<ElementType> ();
+        for(auto &element : set)
+            elementType->pushFieldDataIntoBinaryBlob(const_cast<void*> (static_cast<const void*> (&element)), binaryBlobBuilder);
+    }
+
+    virtual bool canReadFieldWithTypeDescriptor(const TypeDescriptorPtr &encoding) const
+    {
+        switch(encoding->kind)
+        {
+        case TypeDescriptorKind::Set8:
+        case TypeDescriptorKind::Set16:
+        case TypeDescriptorKind::Set32:
+            {
+                auto targetTypeMapper = typeMapperForType<ElementType> ();
+                auto elementTypeDescriptor = std::static_pointer_cast<SetTypeDescriptor> (encoding)->element;
+                return targetTypeMapper->canReadFieldWithTypeDescriptor(elementTypeDescriptor);
+            }
+        default:
+            return false;
+        }
+    }
+
+    virtual bool readFieldWith(void *fieldPointer, const TypeDescriptorPtr &fieldEncoding, ReadStream *input)
+    {
+        auto &destination = *reinterpret_cast<ContainerType*> (fieldPointer);
+        size_t elementCount = 0;
+
+        switch(fieldEncoding->kind)
+        {
+        case TypeDescriptorKind::Set8:
+            {
+                uint8_t count = 0;
+                if(!input->readUInt8(count))
+                    return false;
+                elementCount = count;
+            }
+            break;
+        case TypeDescriptorKind::Set16:
+            {
+                uint16_t count = 0;
+                if(!input->readUInt16(count))
+                    return false;
+                elementCount = count;
+            }
+            break;
+        case TypeDescriptorKind::Set32:
+            {
+                uint32_t count = 0;
+                if(!input->readUInt32(count))
+                    return false;
+                elementCount = count;
+            }
+            break;
+        default:
+            return false;
+        }
+
+        auto targetTypeMapper = typeMapperForType<ElementType> ();
+        auto elementTypeDescriptor = std::static_pointer_cast<SetTypeDescriptor> (fieldEncoding)->element;
+        for(size_t i = 0; i < elementCount; ++i)
+        {
+            ElementType readedElement;
+            if(!targetTypeMapper->readFieldWith(&readedElement, elementTypeDescriptor, input))
+                return false;
+
+            destination.insert(readedElement);
+        }
+
+        return true;
+    }
+
+    TypeDescriptorPtr getOrCreateTypeDescriptor(TypeDescriptorContext *context)
+    {
+        return context->getOrCreateSetTypeDescriptor(TypeDescriptorKind::Set32, 
+            context->getForTypeMapper(typeMapperForType<ElementType> ())
+        );
+    }
+};
+
+template<typename ET>
+struct TypeMapperFor<std::set<ET>> : SingletonTypeMapperFor<StdSetTypeMapper<std::set<ET>>> {};
+
+template<typename ET>
+struct TypeMapperFor<std::unordered_set<ET>> : SingletonTypeMapperFor<StdSetTypeMapper<std::unordered_set<ET>>> {};
+
+/**
+ * std::(unordered_)map type mapper.
+ */
+template<typename CT>
+class StdMapTypeMapper : public PrimitiveTypeMapper
+{
+public:
+    static constexpr bool IsObjectType = false;
+    static constexpr bool IsReferenceType = false;
+
+    typedef CT ContainerType;
+    typedef typename CT::value_type ElementType;
+    typedef typename CT::key_type KeyType;
+    typedef typename CT::mapped_type ValueType;
+    typedef StdMapTypeMapper<CT> ThisType;
+
+    static TypeMapperPtr uniqueInstance()
+    {
+        static auto singleton = std::make_shared<ThisType> ();
+        return singleton;
+    }
+
+    StdMapTypeMapper()
+    {
+        name = typeDescriptorKindToString(TypeDescriptorKind::Map32);
+    }
+
+    virtual void writeFieldWith(void *fieldPointer, WriteStream *output) override
+    {
+        auto &map = *reinterpret_cast<ContainerType*> (fieldPointer);
+        output->writeUInt32(map.size());
+
+        auto keyType = typeMapperForType<KeyType> ();
+        auto valueType = typeMapperForType<ValueType> ();
+        for(auto &element : map)
+        {
+            keyType->writeFieldWith(const_cast<void*> (static_cast<const void*> (&element.first)), output);
+            valueType->writeFieldWith(&element.second, output);
+        }
+    }
+
+    virtual void pushFieldDataIntoBinaryBlob(void *fieldPointer, BinaryBlobBuilder &binaryBlobBuilder)
+    {
+        auto &map = *reinterpret_cast<ContainerType*> (fieldPointer);
+
+        auto keyType = typeMapperForType<KeyType> ();
+        auto valueType = typeMapperForType<ValueType> ();
+        for(auto &element : map)
+        {
+            keyType->pushFieldDataIntoBinaryBlob(const_cast<void*> (static_cast<const void*> (&element.first)), binaryBlobBuilder);
+            valueType->pushFieldDataIntoBinaryBlob(&element.second, binaryBlobBuilder);
+        }
+    }
+
+    virtual bool canReadFieldWithTypeDescriptor(const TypeDescriptorPtr &encoding) const
+    {
+        switch(encoding->kind)
+        {
+        case TypeDescriptorKind::Map8:
+        case TypeDescriptorKind::Map16:
+        case TypeDescriptorKind::Map32:
+            {
+                auto targetKeyTypeMapper = typeMapperForType<KeyType> ();
+                auto targetValueTypeMapper = typeMapperForType<ValueType> ();
+                auto mapTypeDescriptor = std::static_pointer_cast<MapTypeDescriptor> (encoding);
+                return targetKeyTypeMapper->canReadFieldWithTypeDescriptor(mapTypeDescriptor->key) &&
+                    targetValueTypeMapper->canReadFieldWithTypeDescriptor(mapTypeDescriptor->value);
+            }
+        default:
+            return false;
+        }
+    }
+
+    virtual bool readFieldWith(void *fieldPointer, const TypeDescriptorPtr &fieldEncoding, ReadStream *input)
+    {
+        auto &destination = *reinterpret_cast<ContainerType*> (fieldPointer);
+        size_t elementCount = 0;
+
+        switch(fieldEncoding->kind)
+        {
+        case TypeDescriptorKind::Map8:
+            {
+                uint8_t count = 0;
+                if(!input->readUInt8(count))
+                    return false;
+                elementCount = count;
+            }
+            break;
+        case TypeDescriptorKind::Map16:
+            {
+                uint16_t count = 0;
+                if(!input->readUInt16(count))
+                    return false;
+                elementCount = count;
+            }
+            break;
+        case TypeDescriptorKind::Map32:
+            {
+                uint32_t count = 0;
+                if(!input->readUInt32(count))
+                    return false;
+                elementCount = count;
+            }
+            break;
+        default:
+            return false;
+        }
+
+        auto targetKeyTypeMapper = typeMapperForType<KeyType> ();
+        auto targetValueTypeMapper = typeMapperForType<ValueType> ();
+        auto mapTypeDescriptor = std::static_pointer_cast<MapTypeDescriptor> (fieldEncoding);
+        for(size_t i = 0; i < elementCount; ++i)
+        {
+            KeyType readedKey;
+            ValueType readedValue;
+            if(!targetKeyTypeMapper->readFieldWith(&readedKey, mapTypeDescriptor->key, input) ||
+               !targetValueTypeMapper->readFieldWith(&readedValue, mapTypeDescriptor->value, input))
+                return false;
+
+            destination.insert(std::make_pair(readedKey, readedValue));
+        }
+
+        return true;
+    }
+
+    TypeDescriptorPtr getOrCreateTypeDescriptor(TypeDescriptorContext *context)
+    {
+        return context->getOrCreateMapTypeDescriptor(TypeDescriptorKind::Map32, 
+            context->getForTypeMapper(typeMapperForType<KeyType> ()),
+            context->getForTypeMapper(typeMapperForType<ValueType> ())
+        );
+    }
+};
+
+template<typename KT, typename VT>
+struct TypeMapperFor<std::map<KT, VT>> : SingletonTypeMapperFor<StdMapTypeMapper<std::map<KT, VT>>> {};
+
+template<typename KT, typename VT>
+struct TypeMapperFor<std::unordered_map<KT, VT>> : SingletonTypeMapperFor<StdMapTypeMapper<std::unordered_map<KT, VT>>> {};
+
+/**
  * Tag for marking a serializable structure.
  */
 struct SerializableStructureTag {};
@@ -2313,6 +2866,11 @@ public:
     {
         binaryBlobBuilder.internString16(name);
         typeMapper->pushDataIntoBinaryBlob(binaryBlobBuilder);
+        for(auto &instance: instances)
+        {
+            auto instancePointer = instance->getObjectBasePointer();
+            typeMapper->pushInstanceDataIntoBinaryBlob(instancePointer, binaryBlobBuilder);
+        }
     }
 
     void addObject(const ObjectMapperPtr &object)

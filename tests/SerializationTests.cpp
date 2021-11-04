@@ -9,12 +9,97 @@
     }
 
 #define assertEquals(expected, obtained) guardException({ \
-    const auto &expectedValue = expected; \
-    const auto &obtainedValue = obtained; \
+    const auto expectedValue = expected; \
+    const auto obtainedValue = obtained; \
     if(!(expectedValue == obtainedValue)) { \
         std::cout << __FILE__ << ":" << __LINE__ << ": Assertion failure: " << obtainedValue << " is not equal to the expected value of " << expectedValue << std::endl; \
         ++testErrorCount; \
     } }) \
+
+template<typename T>
+std::ostream &operator<<(std::ostream &out, const std::vector<T> &v)
+{
+    out << '{';
+    bool first = true;
+    for(const auto &e : v)
+    {
+        if(first)
+            first = false;
+        else
+            out << ", ";
+        out << '"' << e << '"';
+    }
+    out << '}';
+    return out;
+}
+
+template<typename T>
+std::ostream &operator<<(std::ostream &out, const std::set<T> &v)
+{
+    out << '{';
+    bool first = true;
+    for(const auto &e : v)
+    {
+        if(first)
+            first = false;
+        else
+            out << ", ";
+        out << '"' << e << '"';
+    }
+    out << '}';
+    return out;
+}
+
+template<typename T>
+std::ostream &operator<<(std::ostream &out, const std::unordered_set<T> &v)
+{
+    out << '{';
+    bool first = true;
+    for(const auto &e : v)
+    {
+        if(first)
+            first = false;
+        else
+            out << ", ";
+        out << '"' << e << '"';
+    }
+    out << '}';
+    return out;
+}
+
+template<typename K, typename V>
+std::ostream &operator<<(std::ostream &out, const std::map<K, V> &v)
+{
+    out << '{';
+    bool first = true;
+    for(const auto &e : v)
+    {
+        if(first)
+            first = false;
+        else
+            out << ", ";
+        out << "{'" << e.first << "', '" << e.second << "'}";
+    }
+    out << '}';
+    return out;
+}
+
+template<typename K, typename V>
+std::ostream &operator<<(std::ostream &out, const std::unordered_map<K, V> &v)
+{
+    out << '{';
+    bool first = true;
+    for(const auto &e : v)
+    {
+        if(first)
+            first = false;
+        else
+            out << ", ";
+        out << "{'" << e.first << "', '" << e.second << "'}";
+    }
+    out << '}';
+    return out;
+}
 
 /**
  * Sample structure with inline Coal serialization specs.
@@ -263,6 +348,27 @@ int main()
 
         assertEquals(42.5f, coal::deserialize<float> (coal::serialize<float> (42.5f)).value());
         assertEquals(42.5, coal::deserialize<double> (coal::serialize<double> (42.5)).value());
+
+        assertEquals("Hello World\n\r", coal::deserialize<std::string> (coal::serialize<std::string> ("Hello World\n\r")).value());
+
+        assertEquals((std::vector<int>{1, 2, 3, 3, 42}), coal::deserialize<std::vector<int>> (coal::serialize(std::vector<int>{1, 2, 3, 3, 42})).value());
+        assertEquals((std::vector<std::string>{"Hello", "World", "\r\n"}), coal::deserialize<std::vector<std::string>> (coal::serialize(std::vector<std::string>{"Hello", "World", "\r\n"})).value());
+
+        assertEquals((std::set<int>{1, 2, 3, 42}), coal::deserialize<std::set<int>> (coal::serialize(std::set<int>{1, 2, 3, 42})).value());
+        assertEquals((std::set<std::string>{"Hello", "World", "\r\n"}), coal::deserialize<std::set<std::string>> (coal::serialize(std::set<std::string>{"Hello", "World", "\r\n"})).value());
+        assertEquals((std::unordered_set<int>{1, 2, 3, 42}), coal::deserialize<std::unordered_set<int>> (coal::serialize(std::unordered_set<int>{1, 2, 3, 42})).value());
+        assertEquals((std::unordered_set<std::string>{"Hello", "World", "\r\n"}), coal::deserialize<std::unordered_set<std::string>> (coal::serialize(std::unordered_set<std::string>{"Hello", "World", "\r\n"})).value());
+
+        assertEquals((std::set<int>{1, 2, 3, 42}), coal::deserialize<std::set<int>> (coal::serialize(std::unordered_set<int>{1, 2, 3, 42})).value());
+        assertEquals((std::set<std::string>{"Hello", "World", "\r\n"}), coal::deserialize<std::set<std::string>> (coal::serialize(std::unordered_set<std::string>{"Hello", "World", "\r\n"})).value());
+        assertEquals((std::unordered_set<int>{1, 2, 3, 42}), coal::deserialize<std::unordered_set<int>> (coal::serialize(std::set<int>{1, 2, 3, 42})).value());
+        assertEquals((std::unordered_set<std::string>{"Hello", "World", "\r\n"}), coal::deserialize<std::unordered_set<std::string>> (coal::serialize(std::set<std::string>{"Hello", "World", "\r\n"})).value());
+
+        assertEquals((std::map<std::string, int>{{"First", 1}, {"Second", 2}, {"Third", 3}}), (coal::deserialize<std::map<std::string, int>> (coal::serialize(std::map<std::string, int>{{"First", 1}, {"Second", 2}, {"Third", 3}})).value()));
+        assertEquals((std::unordered_map<std::string, int>{{"First", 1}, {"Second", 2}, {"Third", 3}}), (coal::deserialize<std::unordered_map<std::string, int>> (coal::serialize(std::unordered_map<std::string, int>{{"First", 1}, {"Second", 2}, {"Third", 3}})).value()));
+
+        assertEquals((std::map<std::string, int>{{"First", 1}, {"Second", 2}, {"Third", 3}}), (coal::deserialize<std::map<std::string, int>> (coal::serialize(std::unordered_map<std::string, int>{{"First", 1}, {"Second", 2}, {"Third", 3}})).value()));
+        assertEquals((std::unordered_map<std::string, int>{{"First", 1}, {"Second", 2}, {"Third", 3}}), (coal::deserialize<std::unordered_map<std::string, int>> (coal::serialize(std::map<std::string, int>{{"First", 1}, {"Second", 2}, {"Third", 3}})).value()));
     }
 
     // Structure

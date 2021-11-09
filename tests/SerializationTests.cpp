@@ -1,4 +1,6 @@
 #include "coal-serialization/coal.hpp"
+#include "coal-serialization/coal-std-bindings.hpp"
+
 #include <stdexcept>
 #include <iostream>
 

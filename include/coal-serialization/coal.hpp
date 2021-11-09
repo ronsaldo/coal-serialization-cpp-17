@@ -126,6 +126,7 @@ enum class TypeDescriptorKind : uint8_t
     Char32 = 0x28,
     Fixed16_16 = 0x29,
     Fixed16_16_Sat = 0x2A,
+    PrimitiveTypeDescriptorCount,
 
     Struct = 0x80,
     TypedObject = 0x81,
@@ -140,7 +141,6 @@ enum class TypeDescriptorKind : uint8_t
     Map16 = 0x8A,
     Map32 = 0x8B,
 
-    PrimitiveTypeDescriptorCount = Char32 + 1,
 };
 
 inline const char *typeDescriptorKindToString(TypeDescriptorKind kind)

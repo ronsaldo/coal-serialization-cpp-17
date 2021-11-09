@@ -41,6 +41,9 @@ include_directories(
 enable_testing()
 add_subdirectory(tests)
 
+# Build the samples
+add_subdirectory(samples)
+
 # Build the tools
-enable_testing()
 add_subdirectory(tools)
+

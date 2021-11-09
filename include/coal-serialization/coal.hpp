@@ -126,6 +126,8 @@ enum class TypeDescriptorKind : uint8_t
     Char8 = 0x26,
     Char16 = 0x27,
     Char32 = 0x28,
+    Fixed16_16 = 0x29,
+    Fixed16_16_Sat = 0x2A,
 
     Struct = 0x80,
     TypedObject = 0x81,
@@ -188,7 +190,8 @@ inline const char *typeDescriptorKindToString(TypeDescriptorKind kind)
     case TypeDescriptorKind::Char8: return "Char8";
     case TypeDescriptorKind::Char16: return "Char16";
     case TypeDescriptorKind::Char32: return "Char32";
-
+    case TypeDescriptorKind::Fixed16_16: return "Fixed16_16";
+    case TypeDescriptorKind::Fixed16_16_Sat: return "Fixed16_16_Sat";
     case TypeDescriptorKind::Struct: return "Struct";
     case TypeDescriptorKind::TypedObject: return "TypedObject";
     case TypeDescriptorKind::FixedArray: return "FixedArray";
@@ -652,6 +655,7 @@ public:
         case TypeDescriptorKind::Char8: return input->skipBytes(1);
         case TypeDescriptorKind::Char16: return input->skipBytes(2);
         case TypeDescriptorKind::Char32: return input->skipBytes(4);
+        case TypeDescriptorKind::TypedObject: return input->skipBytes(4);
         default: return false;
         }
     }
@@ -671,6 +675,8 @@ public:
         output->writeUInt32(index);
     }
 
+    virtual bool skipDataWith(ReadStream *input);
+
     uint32_t index = 0;
     TypeMapperPtr typeMapper;
 };
@@ -689,6 +695,17 @@ public:
         element->writeDescriptionWith(output);
     }
 
+    virtual bool skipDataWith(ReadStream *input) override
+    {
+        for(uint32_t i = 0; i < size; ++i)
+        {
+            if(!element->skipDataWith(input))
+                return false;
+        }
+
+        return true;
+    }
+
     uint32_t size;
     TypeDescriptorPtr element;
 };
@@ -703,6 +720,48 @@ public:
     {
         output->writeUInt8(uint8_t(kind));
         element->writeDescriptionWith(output);
+    }
+
+    virtual bool skipDataWith(ReadStream *input) override
+    {
+        size_t size = 0;
+        switch(kind)
+        {
+        case TypeDescriptorKind::Array8:
+            {
+                uint8_t count = 0;
+                if(!input->readUInt8(count))
+                    return false;
+                size = count;
+            }
+            break;
+        case TypeDescriptorKind::Array16:
+            {
+                uint16_t count = 0;
+                if(!input->readUInt16(count))
+                    return false;
+                size = count;
+            }
+            break;
+        case TypeDescriptorKind::Array32:
+            {
+                uint32_t count = 0;
+                if(!input->readUInt32(count))
+                    return false;
+                size = count;
+            }
+            break;
+        default:
+            return false;
+        }
+
+        for(size_t i = 0; i < size; ++i)
+        {
+            if(!element->skipDataWith(input))
+                return false;
+        }
+
+        return true;
     }
 
     TypeDescriptorPtr element;
@@ -720,6 +779,48 @@ public:
         element->writeDescriptionWith(output);
     }
 
+    virtual bool skipDataWith(ReadStream *input) override
+    {
+        size_t size = 0;
+        switch(kind)
+        {
+        case TypeDescriptorKind::Set8:
+            {
+                uint8_t count = 0;
+                if(!input->readUInt8(count))
+                    return false;
+                size = count;
+            }
+            break;
+        case TypeDescriptorKind::Set16:
+            {
+                uint16_t count = 0;
+                if(!input->readUInt16(count))
+                    return false;
+                size = count;
+            }
+            break;
+        case TypeDescriptorKind::Set32:
+            {
+                uint32_t count = 0;
+                if(!input->readUInt32(count))
+                    return false;
+                size = count;
+            }
+            break;
+        default:
+            return false;
+        }
+
+        for(size_t i = 0; i < size; ++i)
+        {
+            if(!element->skipDataWith(input))
+                return false;
+        }
+
+        return true;
+    }
+
     TypeDescriptorPtr element;
 };
 
@@ -734,6 +835,48 @@ public:
         output->writeUInt8(uint8_t(kind));
         key->writeDescriptionWith(output);
         value->writeDescriptionWith(output);
+    }
+
+    virtual bool skipDataWith(ReadStream *input) override
+    {
+        size_t size = 0;
+        switch(kind)
+        {
+        case TypeDescriptorKind::Map8:
+            {
+                uint8_t count = 0;
+                if(!input->readUInt8(count))
+                    return false;
+                size = count;
+            }
+            break;
+        case TypeDescriptorKind::Map16:
+            {
+                uint16_t count = 0;
+                if(!input->readUInt16(count))
+                    return false;
+                size = count;
+            }
+            break;
+        case TypeDescriptorKind::Map32:
+            {
+                uint32_t count = 0;
+                if(!input->readUInt32(count))
+                    return false;
+                size = count;
+            }
+            break;
+        default:
+            return false;
+        }
+
+        for(size_t i = 0; i < size; ++i)
+        {
+            if(!key->skipDataWith(input) || !value->skipDataWith(input))
+                return false;
+        }
+
+        return true;
     }
 
     TypeDescriptorPtr key;
@@ -893,7 +1036,7 @@ public:
         
         auto descriptor = std::make_shared<ObjectReferenceTypeDescriptor> ();
         descriptor->kind = TypeDescriptorKind::TypedObject;
-        descriptor->index = objectTypeToClusterIndexMap[objectType];
+        descriptor->index = objectTypeToClusterIndexMap.at(objectType);
         descriptor->typeMapper = objectType;
         return descriptor;
     }
@@ -1197,6 +1340,11 @@ inline void TypeDescriptorContext::writeValueTypeLayoutsWith(WriteStream *output
         output->writeUInt16(typeMapper->getFieldCount());
         typeMapper->writeFieldDescriptionsWith(output);
     }
+}
+
+inline bool StructTypeDescriptor::skipDataWith(ReadStream *input)
+{
+    return typeMapper && typeMapper->skipFieldWith(input);
 }
 
 /**
@@ -2097,6 +2245,19 @@ public:
         name = typeDescriptorKindToString(TypeDescriptorKind::Array32);
     }
 
+    virtual void typeMapperDependenciesDo(const TypeMapperIterationBlock &aBlock) override
+    {
+        typeMapperForType<ET> ()->withTypeMapperDependenciesDo(aBlock);
+    }
+
+    virtual void objectReferencesInFieldDo(void *fieldPointer, std::unordered_map<void*, ObjectMapperPtr> *cache, const ObjectReferenceIterationBlock &aBlock) override
+    {
+        auto &vector = *reinterpret_cast<std::vector<ET>*> (fieldPointer);
+        auto elementType = typeMapperForType<ET> ();
+        for(auto &element : vector)
+            elementType->objectReferencesInFieldDo(&element, cache, aBlock);
+    }
+
     virtual void writeFieldWith(void *fieldPointer, WriteStream *output) override
     {
         auto &vector = *reinterpret_cast<std::vector<ET>*> (fieldPointer);
@@ -2211,6 +2372,19 @@ public:
     StdSetTypeMapper()
     {
         name = typeDescriptorKindToString(TypeDescriptorKind::Set32);
+    }
+
+    virtual void typeMapperDependenciesDo(const TypeMapperIterationBlock &aBlock) override
+    {
+        typeMapperForType<ElementType> ()->withTypeMapperDependenciesDo(aBlock);
+    }
+
+    virtual void objectReferencesInFieldDo(void *fieldPointer, std::unordered_map<void*, ObjectMapperPtr> *cache, const ObjectReferenceIterationBlock &aBlock) override
+    {
+        auto &set = *reinterpret_cast<ContainerType*> (fieldPointer);
+        auto elementType = typeMapperForType<ElementType> ();
+        for(auto &element : set)
+            elementType->objectReferencesInFieldDo(const_cast<void*> (static_cast<const void*> (&element)), cache, aBlock);
     }
 
     virtual void writeFieldWith(void *fieldPointer, WriteStream *output) override
@@ -2335,6 +2509,24 @@ public:
     StdMapTypeMapper()
     {
         name = typeDescriptorKindToString(TypeDescriptorKind::Map32);
+    }
+
+    virtual void typeMapperDependenciesDo(const TypeMapperIterationBlock &aBlock) override
+    {
+        typeMapperForType<KeyType> ()->withTypeMapperDependenciesDo(aBlock);
+        typeMapperForType<ValueType> ()->withTypeMapperDependenciesDo(aBlock);
+    }
+
+    virtual void objectReferencesInFieldDo(void *fieldPointer, std::unordered_map<void*, ObjectMapperPtr> *cache, const ObjectReferenceIterationBlock &aBlock) override
+    {
+        auto &map = *reinterpret_cast<ContainerType*> (fieldPointer);
+        auto keyType = typeMapperForType<KeyType> ();
+        auto valueType = typeMapperForType<ValueType> ();
+        for(auto &element : map)
+        {
+            keyType->objectReferencesInFieldDo(const_cast<void*> (static_cast<const void*> (&element.first)), cache, aBlock);
+            valueType->objectReferencesInFieldDo(&element.second, cache, aBlock);
+        }
     }
 
     virtual void writeFieldWith(void *fieldPointer, WriteStream *output) override
@@ -2751,8 +2943,9 @@ public:
         if(encoding->kind != TypeDescriptorKind::TypedObject)
             return false;
 
-        auto targetTypeMapper = std::static_pointer_cast<ObjectReferenceTypeDescriptor> (encoding)->typeMapper.lock();
-        return targetTypeMapper && targetTypeMapper->getResolvedType() == typeMapperForType<ObjectType> ();
+        auto sourceTypeMapper = std::static_pointer_cast<ObjectReferenceTypeDescriptor> (encoding)->typeMapper.lock();
+        auto targetTypeMapper = typeMapperForType<ObjectType> ();
+        return sourceTypeMapper && sourceTypeMapper->getResolvedType() == targetTypeMapper;
     }
 
     virtual bool readFieldWith(void *fieldPointer, const TypeDescriptorPtr &fieldEncoding, ReadStream *input)
@@ -3073,7 +3266,7 @@ private:
 
     void writeTrailerForObject(const ObjectMapperPtr &rootObject)
     {
-        output->writeUInt32(objectPointerToInstanceIndexTable[rootObject->getObjectBasePointer()] + 1);
+        output->writeUInt32(objectPointerToInstanceIndexTable.at(rootObject->getObjectBasePointer()) + 1);
     }
 
     void prepareForWriting()
@@ -3286,11 +3479,13 @@ private:
                 if(instance)
                 {
                     auto basePointer = instance->getObjectBasePointer();
-                    clusterType->readInstanceWith(basePointer, input);
+                    if(!clusterType->readInstanceWith(basePointer, input))
+                        return false;
                 }
                 else
                 {
-                    clusterType->skipInstanceWith(input);
+                    if(!clusterType->skipInstanceWith(input))
+                        return false;
                 }
             }
         }

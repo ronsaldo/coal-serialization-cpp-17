@@ -306,6 +306,30 @@ public:
     std::shared_ptr<TestSharedCyclicObject> potentiallyCyclicReference2;
 };
 
+/**
+ * TestSharedCyclicObject
+ */
+class TestSharedObjectWithCollections : public coal::SerializableSharedObjectClassTag
+{
+public:
+    typedef TestSharedObjectWithCollections SelfType;
+
+    static constexpr char const __coal_typename__[] = "TestSharedObjectWithCollections";
+
+    static coal::FieldDescriptions __coal_fields__()
+    {
+        return {
+            {"list", &SelfType::list},
+            {"set", &SelfType::set},
+            {"map", &SelfType::map},
+        };
+    }
+
+    std::vector<std::shared_ptr<TestSharedObject>> list;
+    std::unordered_set<std::shared_ptr<TestSharedObject>> set;
+    std::unordered_map<std::string, std::shared_ptr<TestSharedObject>> map;
+};
+
 namespace coal
 {
 template<>
@@ -352,6 +376,7 @@ struct StructureTypeMetadataFor<TestNestedStructureWithDifferentOrder>
 int main()
 {
     int testErrorCount = 0;
+    
     // Primitive values
     {
         assertEquals(false, coal::deserialize<bool> (coal::serialize(false)).value());
@@ -498,6 +523,67 @@ int main()
         materializedSecondObject->potentiallyCyclicReference2.reset();
     }
     
+    // TestSharedObjectWithCollections empty
+    {
+        auto root = std::make_shared<TestSharedObjectWithCollections> ();
+
+        auto serialized = coal::serialize(root);
+        auto materializedObject = coal::deserialize<std::shared_ptr<TestSharedObjectWithCollections>> (serialized).value();
+        assertEquals(0, materializedObject->list.size());
+        assertEquals(0, materializedObject->set.size());
+        assertEquals(0, materializedObject->map.size());
+    }
+
+    // TestSharedObjectWithCollections
+    {
+        auto root = std::make_shared<TestSharedObjectWithCollections> ();
+        auto firstObject = std::make_shared<TestSharedObject> ();
+        firstObject->integerField = 1;
+        firstObject->floatField = 1;
+
+        auto secondObject = std::make_shared<TestSharedObject> ();
+        secondObject->integerField = 2;
+        secondObject->floatField = 2;
+
+        auto thirdObject = std::make_shared<TestSharedObject> ();
+        thirdObject->integerField = 3;
+        thirdObject->floatField = 3;
+
+        root->list.push_back(firstObject);
+        root->list.push_back(secondObject);
+        root->list.push_back(secondObject);
+        root->list.push_back(thirdObject);
+
+        root->set.insert(firstObject);
+        root->set.insert(secondObject);
+        root->set.insert(thirdObject);
+
+        root->map.insert({"First", firstObject});
+        root->map.insert({"Second", secondObject});
+        root->map.insert({"Third", thirdObject});
+
+        auto serialized = coal::serialize(root);
+        auto materializedObject = coal::deserialize<std::shared_ptr<TestSharedObjectWithCollections>> (serialized).value();
+        assertEquals(4, materializedObject->list.size());
+        assertEquals(3, materializedObject->set.size());
+        assertEquals(3, materializedObject->map.size());
+
+        auto materializedFirst = materializedObject->list[0];
+        auto materializedSecond = materializedObject->list[1];
+        assertEquals(materializedSecond, materializedObject->list[2]);
+        auto materializedThird = materializedObject->list[3];
+
+        assertEquals(1, materializedFirst->integerField);
+        assertEquals(1, materializedFirst->floatField);
+        assertEquals(2, materializedSecond->integerField);
+        assertEquals(2, materializedSecond->floatField);
+        assertEquals(3, materializedThird->integerField);
+        assertEquals(3, materializedThird->floatField);
+
+        assertEquals(materializedFirst, materializedObject->map.at("First"));
+        assertEquals(materializedSecond, materializedObject->map.at("Second"));
+        assertEquals(materializedThird, materializedObject->map.at("Third"));
+    }
 
     if(testErrorCount > 0)
         std::cerr << testErrorCount << " test failures" << std::endl;

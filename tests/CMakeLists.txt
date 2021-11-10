@@ -1,2 +1,3 @@
 add_executable(CoalSerializationTests SerializationTests.cpp)
+target_link_libraries(CoalSerializationTests CoalSerialization)
 add_test(NAME RunCoalSerializationTests COMMAND CoalSerializationTests)

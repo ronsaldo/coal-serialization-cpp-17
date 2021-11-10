@@ -1,1 +1,2 @@
 add_executable(CoalSampleGenerator SampleGenerator.cpp)
+target_link_libraries(CoalSampleGenerator CoalSerialization)

@@ -103,7 +103,7 @@ public:
 class SampleCyclicObject : public coal::SerializableSharedObjectClassTag
 {
 public:
-    typedef TestSharedCyclicObject SelfType;
+    typedef SampleCyclicObject SelfType;
 
     static constexpr char const __coal_typename__[] = "SampleCyclicObject";
 
@@ -122,12 +122,12 @@ public:
 /**
  * SampleSharedObjectWithCollection
  */
-class SampleSharedObjectWithCollection : public coal::SerializableSharedObjectClassTag
+class SampleObjectWithCollection : public coal::SerializableSharedObjectClassTag
 {
 public:
-    typedef SampleSharedObjectWithCollection SelfType;
+    typedef SampleObjectWithCollection SelfType;
 
-    static constexpr char const __coal_typename__[] = "SampleSharedObjectWithCollection";
+    static constexpr char const __coal_typename__[] = "SampleObjectWithCollection";
 
     static coal::FieldDescriptions __coal_fields__()
     {
@@ -138,9 +138,9 @@ public:
         };
     }
 
-    std::vector<std::shared_ptr<TestSharedObject>> list;
-    std::unordered_set<std::shared_ptr<TestSharedObject>> set;
-    std::unordered_map<std::string, std::shared_ptr<TestSharedObject>> map;
+    std::vector<std::shared_ptr<SampleObject>> list;
+    std::unordered_set<std::shared_ptr<SampleObject>> set;
+    std::unordered_map<std::string, std::shared_ptr<SampleObject>> map;
 };
 
 

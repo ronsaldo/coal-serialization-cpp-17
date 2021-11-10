@@ -43,63 +43,17 @@ public:
     static constexpr bool IsObjectType = false;
     static constexpr bool IsReferenceType = false;
 
-    static TypeMapperPtr uniqueInstance()
-    {
-        static auto singleton = std::make_shared<StdStringTypeMapper> ();
-        return singleton;
-    }
+    static TypeMapperPtr uniqueInstance();
 
-    StdStringTypeMapper()
-    {
-        name = typeDescriptorKindToString(TypeDescriptorKind::UTF8_32_32);
-    }
+    StdStringTypeMapper();
 
-    virtual void writeFieldWith(void *fieldPointer, WriteStream *output) override
-    {
-        auto string = reinterpret_cast<std::string*> (fieldPointer);
-        output->writeUTF8_32_32(*string);
-    }
+    virtual void writeFieldWith(void *fieldPointer, WriteStream *output) override;
+    virtual void pushFieldDataIntoBinaryBlob(void *fieldPointer, BinaryBlobBuilder &binaryBlobBuilder) override;
 
-    virtual void pushFieldDataIntoBinaryBlob(void *fieldPointer, BinaryBlobBuilder &binaryBlobBuilder)
-    {
-        auto string = reinterpret_cast<std::string*> (fieldPointer);
-        binaryBlobBuilder.internString32(*string);
-    }
+    virtual bool canReadFieldWithTypeDescriptor(const TypeDescriptorPtr &encoding) const;
 
-    virtual bool canReadFieldWithTypeDescriptor(const TypeDescriptorPtr &encoding) const
-    {
-        switch(encoding->kind)
-        {
-        case TypeDescriptorKind::UTF8_32_8:
-        case TypeDescriptorKind::UTF8_32_16:
-        case TypeDescriptorKind::UTF8_32_32:
-            return true;
-        default:
-            return false;
-        }
-    }
-
-    virtual bool readFieldWith(void *fieldPointer, const TypeDescriptorPtr &fieldEncoding, ReadStream *input)
-    {
-        auto destination = reinterpret_cast<std::string*> (fieldPointer);
-
-        switch(fieldEncoding->kind)
-        {
-        case TypeDescriptorKind::UTF8_32_8:
-            return input->readUTF8_32_8(*destination);
-        case TypeDescriptorKind::UTF8_32_16:
-            return input->readUTF8_32_16(*destination);
-        case TypeDescriptorKind::UTF8_32_32:
-            return input->readUTF8_32_32(*destination);
-        default:
-            return false;
-        }
-    }
-
-    TypeDescriptorPtr getOrCreateTypeDescriptor(TypeDescriptorContext *context)
-    {
-        return context->getOrCreatePrimitiveTypeDescriptor(TypeDescriptorKind::UTF8_32_32);
-    }
+    virtual bool readFieldWith(void *fieldPointer, const TypeDescriptorPtr &fieldEncoding, ReadStream *input) override;
+    TypeDescriptorPtr getOrCreateTypeDescriptor(TypeDescriptorContext *context);
 };
 
 template<>
@@ -524,7 +478,6 @@ struct TypeMapperFor<std::map<KT, VT>> : SingletonTypeMapperFor<StdMapTypeMapper
 
 template<typename KT, typename VT>
 struct TypeMapperFor<std::unordered_map<KT, VT>> : SingletonTypeMapperFor<StdMapTypeMapper<std::unordered_map<KT, VT>>> {};
-
 
 /**
  * I am a default wrapper object for a shared object. Shared objects are objects whose pointer are wrapper in a std::shared_ptr

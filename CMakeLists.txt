@@ -16,7 +16,7 @@ if (${CMAKE_CXX_COMPILER_ID} STREQUAL MSVC)
 	# using Visual Studio C++
 	set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /W4")
 else()
-	set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra -std=c++17")
+	set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra -std=c++17 -Wno-unknown-pragmas")
 	if(UNIX)
 		if(NOT ON_EMSCRIPTEN)
         	set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -pthread")
@@ -36,6 +36,9 @@ include_directories(
 "${PROJECT_SOURCE_DIR}/include"
 "${PROJECT_SOURCE_DIR}/third-party/unittestpp"
 )
+
+# Build the library
+add_subdirectory(lib)
 
 # Build the tests
 enable_testing()

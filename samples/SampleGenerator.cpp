@@ -9,6 +9,141 @@ void writeDataToFile(const std::string &filename, const std::vector<uint8_t> &da
     out.write(reinterpret_cast<const char*> (data.data()), data.size());
 }
 
+/**
+ * Sample structure with inline Coal serialization specs.
+ */
+struct SampleStructure : public coal::SerializableStructureTag
+{
+    typedef SampleStructure SelfType;
+
+    static constexpr char const __coal_typename__[] = "SampleStructure";
+
+    static coal::FieldDescriptions __coal_fields__()
+    {
+        return {
+            {"booleanField", &SelfType::booleanField},
+            {"integerField", &SelfType::integerField},
+            {"floatField", &SelfType::floatField},
+        };
+    }
+
+    bool booleanField = false;
+    int integerField = 0;
+    float floatField = 0;
+};
+
+/**
+ * Sample nested structure with inline Coal serialization specs.
+ */
+struct SampleNestedStructure : public coal::SerializableStructureTag
+{
+    typedef SampleNestedStructure SelfType;
+
+    static constexpr char const __coal_typename__[] = "SampleNestedStructure";
+
+    static coal::FieldDescriptions __coal_fields__()
+    {
+        return {
+            {"innerStruct", &SelfType::innerStruct},
+            {"integerField", &SelfType::integerField},
+        };
+    }
+
+    SampleStructure innerStruct = {};
+    int integerField = 0;
+};
+
+/**
+ * SampleObject
+ */
+class SampleObject : public coal::SerializableSharedObjectClassTag
+{
+public:
+    typedef SampleObject SelfType;
+
+    static constexpr char const __coal_typename__[] = "SampleObject";
+
+    static coal::FieldDescriptions __coal_fields__()
+    {
+        return {
+            {"booleanField", &SelfType::booleanField},
+            {"integerField", &SelfType::integerField},
+            {"floatField", &SelfType::floatField},
+        };
+    }
+
+    bool booleanField = false;
+    int integerField = 0;
+    float floatField = 0;
+};
+
+/**
+ * SampleObjectOuter
+ */
+class SampleObjectOuter : public coal::SerializableSharedObjectClassTag
+{
+public:
+    typedef SampleObjectOuter SelfType;
+
+    static constexpr char const __coal_typename__[] = "SampleObjectOuter";
+
+    static coal::FieldDescriptions __coal_fields__()
+    {
+        return {
+            {"innerObject", &SelfType::innerObject},
+        };
+    }
+
+    std::shared_ptr<SampleObject> innerObject;
+};
+
+/**
+ * SampleCyclicObject
+ */
+class SampleCyclicObject : public coal::SerializableSharedObjectClassTag
+{
+public:
+    typedef TestSharedCyclicObject SelfType;
+
+    static constexpr char const __coal_typename__[] = "SampleCyclicObject";
+
+    static coal::FieldDescriptions __coal_fields__()
+    {
+        return {
+            {"potentiallyCyclicReference", &SelfType::potentiallyCyclicReference},
+            {"potentiallyCyclicReference2", &SelfType::potentiallyCyclicReference2},
+        };
+    }
+
+    std::shared_ptr<SampleCyclicObject> potentiallyCyclicReference;
+    std::shared_ptr<SampleCyclicObject> potentiallyCyclicReference2;
+};
+
+/**
+ * SampleSharedObjectWithCollection
+ */
+class SampleSharedObjectWithCollection : public coal::SerializableSharedObjectClassTag
+{
+public:
+    typedef SampleSharedObjectWithCollection SelfType;
+
+    static constexpr char const __coal_typename__[] = "SampleSharedObjectWithCollection";
+
+    static coal::FieldDescriptions __coal_fields__()
+    {
+        return {
+            {"list", &SelfType::list},
+            {"set", &SelfType::set},
+            {"map", &SelfType::map},
+        };
+    }
+
+    std::vector<std::shared_ptr<TestSharedObject>> list;
+    std::unordered_set<std::shared_ptr<TestSharedObject>> set;
+    std::unordered_map<std::string, std::shared_ptr<TestSharedObject>> map;
+};
+
+
 int main()
 {
     // Primitive values
@@ -29,7 +164,7 @@ int main()
         writeDataToFile("float32-42.5.coal", coal::serialize<float> (42.5f));
         writeDataToFile("float64-42.5.coal", coal::serialize<double> (42.5));
 
-        writeDataToFile("utf8_32_32-hello.coal", coal::serialize<std::string> ("Hello World\n\r"));
+        writeDataToFile("utf8_32_32-hello.coal", coal::serialize<std::string> ("Hello World\r\n"));
 
         writeDataToFile("array32-1-2-3-3-42.coal", coal::serialize(std::vector<int>{1, 2, 3, 3, 42}));
         writeDataToFile("array32-Hello-World-crlf.coal", coal::serialize(std::vector<std::string>{"Hello", "World", "\r\n"}));
@@ -40,6 +175,14 @@ int main()
         writeDataToFile("map32-First-1-Second-2-Third-3.coal", coal::serialize(std::map<std::string, int>{{"First", 1}, {"Second", 2}, {"Third", 3}}));
     }
 
+    // Structure
+    {
+        writeDataToFile("sample-structure-empty.coal", coal::serialize(SampleStructure{}));
+        writeDataToFile("sample-structure-non-empty.coal", coal::serialize(SampleStructure{{}, true, -42, 42.5f}));
+
+        writeDataToFile("sample-nested-structure-empty.coal", coal::serialize(SampleNestedStructure{}));
+        writeDataToFile("sample-nested-structure-non-empty.coal", coal::serialize(SampleNestedStructure{{}, {{}, true, -42, 42.5f}, 13}));
+    }
 
     return 0;
 }

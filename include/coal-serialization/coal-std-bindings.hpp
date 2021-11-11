@@ -585,7 +585,7 @@ public:
         name = typeDescriptorKindToString(TypeDescriptorKind::TypedObject);
     }
 
-    virtual bool isSerializationDependencyType() const
+    virtual bool isSerializationDependencyType() const override
     {
         return true;
     }

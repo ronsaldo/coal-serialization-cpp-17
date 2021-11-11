@@ -909,7 +909,7 @@ public:
     }
 
 
-    TypeDescriptorPtr getOrCreateTypeDescriptor(TypeDescriptorContext *context)
+    virtual TypeDescriptorPtr getOrCreateTypeDescriptor(TypeDescriptorContext *context) override
     {
         return context->getOrCreatePrimitiveTypeDescriptor(EncodingDescriptorKind);
     }

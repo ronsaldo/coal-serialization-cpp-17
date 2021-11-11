@@ -105,7 +105,7 @@ uint32_t BinaryBlobBuilder::getOffsetForBytes(const uint8_t *bytes, size_t dataS
             continue;
 
         if(memcmp(&data[entryOffset], bytes, dataSize) == 0)
-            return entryOffset;
+            return uint32_t(entryOffset);
     }
 
     // Entry not found.
@@ -754,7 +754,7 @@ TypeDescriptorPtr TypeDescriptorContext::addValueType(const TypeMapperPtr &mappe
 
     auto descriptor = std::make_shared<StructTypeDescriptor> ();
     descriptor->kind = TypeDescriptorKind::Struct;
-    descriptor->index = valueTypes.size();
+    descriptor->index = uint32_t(valueTypes.size());
     descriptor->typeMapper = mapper;
 
     valueTypes.push_back(mapper);
@@ -862,7 +862,7 @@ bool TypeDescriptorContext::readTypeDescriptorWith(TypeDescriptorPtr &descriptor
 
 void TypeDescriptorContext::addObjectTypeMapper(const TypeMapperPtr &typeMapper)
 {
-    objectTypeToClusterIndexMap.insert({typeMapper, clusterTypes.size()});
+    objectTypeToClusterIndexMap.insert({typeMapper, uint32_t(clusterTypes.size())});
     clusterTypes.push_back(typeMapper);
 }
 
@@ -1589,9 +1589,9 @@ void SerializationCluster::writeDescriptionWith(WriteStream *output)
 {
     auto super = supertype.lock();
     output->writeUTF8_32_16(name);
-    output->writeUInt32(super ? super->index + 1 : 0);
+    output->writeUInt32(uint32_t(super ? super->index + 1 : 0));
     output->writeUInt16(typeMapper->getFieldCount());
-    output->writeUInt32(instances.size());
+    output->writeUInt32(uint32_t(instances.size()));
     typeMapper->writeFieldDescriptionsWith(output);
 }
 
@@ -1734,8 +1734,8 @@ void Serializer::writeHeader()
 
     output->writeUInt32(uint32_t(binaryBlobBuilder.getDataSize())); // Blob size
     output->writeUInt32(typeDescriptorContext.getValueTypeCount()); // Value type layouts size
-    output->writeUInt32(clusters.size()); // Cluster Count
-    output->writeUInt32(objectCount); // Cluster Count
+    output->writeUInt32(uint32_t(clusters.size())); // Cluster Count
+    output->writeUInt32(uint32_t(objectCount)); // Cluster Count
 }
 
 void Serializer::writeBlob()

@@ -98,7 +98,7 @@ public:
     virtual void writeFieldWith(void *fieldPointer, WriteStream *output) override
     {
         auto &vector = *reinterpret_cast<std::vector<ET>*> (fieldPointer);
-        output->writeUInt32(vector.size());
+        output->writeUInt32(uint32_t(vector.size()));
         auto elementType = typeMapperForType<ET> ();
         for(auto &element : vector)
             elementType->writeFieldWith(&element, output);
@@ -227,7 +227,7 @@ public:
     virtual void writeFieldWith(void *fieldPointer, WriteStream *output) override
     {
         auto &set = *reinterpret_cast<ContainerType*> (fieldPointer);
-        output->writeUInt32(set.size());
+        output->writeUInt32(uint32_t(set.size()));
         auto elementType = typeMapperForType<ElementType> ();
         for(auto &element : set)
             elementType->writeFieldWith(const_cast<void*> (static_cast<const void*> (&element)), output);
@@ -369,7 +369,7 @@ public:
     virtual void writeFieldWith(void *fieldPointer, WriteStream *output) override
     {
         auto &map = *reinterpret_cast<ContainerType*> (fieldPointer);
-        output->writeUInt32(map.size());
+        output->writeUInt32(uint32_t(map.size()));
 
         auto keyType = typeMapperForType<KeyType> ();
         auto valueType = typeMapperForType<ValueType> ();

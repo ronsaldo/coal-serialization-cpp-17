@@ -37,6 +37,7 @@
 #include <map> // for std::pair key
 #include <unordered_set>
 #include <algorithm>
+#include <array>
 
 #include <mutex> // for std::once_flag
 #include <functional>
@@ -75,8 +76,8 @@ typedef std::weak_ptr<SerializationCluster> SerializationClusterWeakPtr;
 class FieldAccessor;
 typedef std::shared_ptr<FieldAccessor> FieldAccessorPtr;
 
-struct WriteStream;
-struct ReadStream;
+class WriteStream;
+class ReadStream;
 
 /**
  * The kind of a coal type descriptor.
@@ -209,8 +210,9 @@ private:
 /**
  * Interface for a read stream.
  */
-struct ReadStream
+class ReadStream
 {
+public:
     virtual ~ReadStream();
 
     virtual bool readBytes(uint8_t *buffer, size_t size) = 0;
@@ -578,7 +580,7 @@ public:
     virtual void writeFieldDescriptionsWith(WriteStream *output) const override;
     virtual void writeInstanceWith(void *basePointer, WriteStream *output) override;
 
-    virtual void pushInstanceDataIntoBinaryBlob(void *instancePointer, BinaryBlobBuilder &binaryBlobBuilder);
+    virtual void pushInstanceDataIntoBinaryBlob(void *instancePointer, BinaryBlobBuilder &binaryBlobBuilder) override;
     virtual void typeMapperDependenciesDo(const TypeMapperIterationBlock &aBlock) override;
 
 protected:

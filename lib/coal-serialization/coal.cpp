@@ -1485,6 +1485,7 @@ bool StructureMaterializationTypeMapper::canReadFieldWithTypeDescriptor(const Ty
 
 bool StructureMaterializationTypeMapper::readFieldWith(void *basePointer, const TypeDescriptorPtr &fieldEncoding, ReadStream *input)
 {
+    (void)fieldEncoding;
     assert(canReadFieldWithTypeDescriptor(fieldEncoding));
 
     for(auto &field : fields)

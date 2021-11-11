@@ -50,10 +50,10 @@ public:
     virtual void writeFieldWith(void *fieldPointer, WriteStream *output) override;
     virtual void pushFieldDataIntoBinaryBlob(void *fieldPointer, BinaryBlobBuilder &binaryBlobBuilder) override;
 
-    virtual bool canReadFieldWithTypeDescriptor(const TypeDescriptorPtr &encoding) const;
+    virtual bool canReadFieldWithTypeDescriptor(const TypeDescriptorPtr &encoding) const override;
 
     virtual bool readFieldWith(void *fieldPointer, const TypeDescriptorPtr &fieldEncoding, ReadStream *input) override;
-    TypeDescriptorPtr getOrCreateTypeDescriptor(TypeDescriptorContext *context);
+    virtual TypeDescriptorPtr getOrCreateTypeDescriptor(TypeDescriptorContext *context) override;
 };
 
 template<>
@@ -104,7 +104,7 @@ public:
             elementType->writeFieldWith(&element, output);
     }
 
-    virtual void pushFieldDataIntoBinaryBlob(void *fieldPointer, BinaryBlobBuilder &binaryBlobBuilder)
+    virtual void pushFieldDataIntoBinaryBlob(void *fieldPointer, BinaryBlobBuilder &binaryBlobBuilder) override
     {
         auto &vector = *reinterpret_cast<std::vector<ET>*> (fieldPointer);
         auto elementType = typeMapperForType<ET> ();
@@ -112,7 +112,7 @@ public:
             elementType->pushFieldDataIntoBinaryBlob(&element, binaryBlobBuilder);
     }
 
-    virtual bool canReadFieldWithTypeDescriptor(const TypeDescriptorPtr &encoding) const
+    virtual bool canReadFieldWithTypeDescriptor(const TypeDescriptorPtr &encoding) const override
     {
         switch(encoding->kind)
         {
@@ -129,7 +129,7 @@ public:
         }
     }
 
-    virtual bool readFieldWith(void *fieldPointer, const TypeDescriptorPtr &fieldEncoding, ReadStream *input)
+    virtual bool readFieldWith(void *fieldPointer, const TypeDescriptorPtr &fieldEncoding, ReadStream *input) override
     {
         auto &destination = *reinterpret_cast<std::vector<ET>*> (fieldPointer);
 
@@ -175,7 +175,7 @@ public:
         return true;
     }
 
-    TypeDescriptorPtr getOrCreateTypeDescriptor(TypeDescriptorContext *context)
+    virtual TypeDescriptorPtr getOrCreateTypeDescriptor(TypeDescriptorContext *context) override
     {
         return context->getOrCreateArrayTypeDescriptor(TypeDescriptorKind::Array32, 
             context->getForTypeMapper(typeMapperForType<ET> ())
@@ -233,7 +233,7 @@ public:
             elementType->writeFieldWith(const_cast<void*> (static_cast<const void*> (&element)), output);
     }
 
-    virtual void pushFieldDataIntoBinaryBlob(void *fieldPointer, BinaryBlobBuilder &binaryBlobBuilder)
+    virtual void pushFieldDataIntoBinaryBlob(void *fieldPointer, BinaryBlobBuilder &binaryBlobBuilder) override
     {
         auto &set = *reinterpret_cast<ContainerType*> (fieldPointer);
         auto elementType = typeMapperForType<ElementType> ();
@@ -241,7 +241,7 @@ public:
             elementType->pushFieldDataIntoBinaryBlob(const_cast<void*> (static_cast<const void*> (&element)), binaryBlobBuilder);
     }
 
-    virtual bool canReadFieldWithTypeDescriptor(const TypeDescriptorPtr &encoding) const
+    virtual bool canReadFieldWithTypeDescriptor(const TypeDescriptorPtr &encoding) const override
     {
         switch(encoding->kind)
         {
@@ -258,7 +258,7 @@ public:
         }
     }
 
-    virtual bool readFieldWith(void *fieldPointer, const TypeDescriptorPtr &fieldEncoding, ReadStream *input)
+    virtual bool readFieldWith(void *fieldPointer, const TypeDescriptorPtr &fieldEncoding, ReadStream *input) override
     {
         auto &destination = *reinterpret_cast<ContainerType*> (fieldPointer);
         size_t elementCount = 0;
@@ -307,7 +307,7 @@ public:
         return true;
     }
 
-    TypeDescriptorPtr getOrCreateTypeDescriptor(TypeDescriptorContext *context)
+    virtual TypeDescriptorPtr getOrCreateTypeDescriptor(TypeDescriptorContext *context) override
     {
         return context->getOrCreateSetTypeDescriptor(TypeDescriptorKind::Set32, 
             context->getForTypeMapper(typeMapperForType<ElementType> ())
@@ -380,7 +380,7 @@ public:
         }
     }
 
-    virtual void pushFieldDataIntoBinaryBlob(void *fieldPointer, BinaryBlobBuilder &binaryBlobBuilder)
+    virtual void pushFieldDataIntoBinaryBlob(void *fieldPointer, BinaryBlobBuilder &binaryBlobBuilder) override
     {
         auto &map = *reinterpret_cast<ContainerType*> (fieldPointer);
 
@@ -393,7 +393,7 @@ public:
         }
     }
 
-    virtual bool canReadFieldWithTypeDescriptor(const TypeDescriptorPtr &encoding) const
+    virtual bool canReadFieldWithTypeDescriptor(const TypeDescriptorPtr &encoding) const override
     {
         switch(encoding->kind)
         {
@@ -412,7 +412,7 @@ public:
         }
     }
 
-    virtual bool readFieldWith(void *fieldPointer, const TypeDescriptorPtr &fieldEncoding, ReadStream *input)
+    virtual bool readFieldWith(void *fieldPointer, const TypeDescriptorPtr &fieldEncoding, ReadStream *input) override
     {
         auto &destination = *reinterpret_cast<ContainerType*> (fieldPointer);
         size_t elementCount = 0;
@@ -464,7 +464,7 @@ public:
         return true;
     }
 
-    TypeDescriptorPtr getOrCreateTypeDescriptor(TypeDescriptorContext *context)
+    virtual TypeDescriptorPtr getOrCreateTypeDescriptor(TypeDescriptorContext *context) override
     {
         return context->getOrCreateMapTypeDescriptor(TypeDescriptorKind::Map32, 
             context->getForTypeMapper(typeMapperForType<KeyType> ()),
@@ -601,7 +601,7 @@ public:
         output->writeObjectPointerAsReference(objectPointer->get());
     }
 
-    virtual bool canReadFieldWithTypeDescriptor(const TypeDescriptorPtr &encoding) const
+    virtual bool canReadFieldWithTypeDescriptor(const TypeDescriptorPtr &encoding) const override
     {
         // Untyped object.
         if(encoding->kind == TypeDescriptorKind::Object)
@@ -615,7 +615,7 @@ public:
         return sourceTypeMapper && sourceTypeMapper->getResolvedType() == targetTypeMapper;
     }
 
-    virtual bool readFieldWith(void *fieldPointer, const TypeDescriptorPtr &fieldEncoding, ReadStream *input)
+    virtual bool readFieldWith(void *fieldPointer, const TypeDescriptorPtr &fieldEncoding, ReadStream *input) override
     {
         ObjectMapperPtr instance;
         if(!input->readInstanceReference(instance))
@@ -644,7 +644,7 @@ public:
         aBlock(typeMapperForType<ObjectType> ());
     }
 
-    TypeDescriptorPtr getOrCreateTypeDescriptor(TypeDescriptorContext *context)
+    virtual TypeDescriptorPtr getOrCreateTypeDescriptor(TypeDescriptorContext *context) override
     {
         return context->getOrCreateForTypedObjectReference(typeMapperForType<ObjectType> ());
     }

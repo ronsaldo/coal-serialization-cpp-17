@@ -20,6 +20,9 @@ jobs:
 
             - name: CI Build
               run: ./scripts/ci-build.sh
+            
+            - name: CI Tests
+              run: ./scripts/ci-tests.sh
     build-osx:
         name: Build OS X
         runs-on: ${{ matrix.variant.os }}
@@ -39,6 +42,9 @@ jobs:
 
             - name: CI Build
               run: ./scripts/ci-build.sh
+            
+            - name: CI Tests
+              run: ./scripts/ci-tests.sh
     build-windows:
         name: Build Windows
         runs-on: ${{ matrix.variant.os }}
@@ -64,6 +70,9 @@ jobs:
 
             - name: CI Build
               run: ./scripts/ci-build.ps1
+            
+            - name: CI Tests
+              run: ./scripts/ci-tests.ps1
 
             - name: Release
               uses: softprops/action-gh-release@v1

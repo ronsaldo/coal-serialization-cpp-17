@@ -1215,9 +1215,9 @@ uint16_t AggregateTypeMapper::getFieldCount() const
     return uint16_t(fields.size());
 }
 
-FieldDescription *AggregateTypeMapper::getFieldNamed(const std::string &name)
+FieldDescription *AggregateTypeMapper::getFieldNamed(const std::string &fieldName)
 {
-    auto it = fieldNameMap.find(name);
+    auto it = fieldNameMap.find(fieldName);
     return it != fieldNameMap.end() ? &fields[it->second] : nullptr;
 }
 

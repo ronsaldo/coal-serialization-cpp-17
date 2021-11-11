@@ -748,7 +748,7 @@ public:
         output->writeBytes(reinterpret_cast<const uint8_t*> (fieldPointer), sizeof(FieldType));
     }
 
-    virtual bool canReadFieldWithTypeDescriptor(const TypeDescriptorPtr &encoding) const
+    virtual bool canReadFieldWithTypeDescriptor(const TypeDescriptorPtr &encoding) const override
     {
         switch(encoding->kind)
         {
@@ -778,7 +778,7 @@ public:
         }
     }
 
-    virtual bool readFieldWith(void *fieldPointer, const TypeDescriptorPtr &fieldEncoding, ReadStream *input)
+    virtual bool readFieldWith(void *fieldPointer, const TypeDescriptorPtr &fieldEncoding, ReadStream *input) override
     {
         auto destination = reinterpret_cast<FieldType*> (fieldPointer);
 

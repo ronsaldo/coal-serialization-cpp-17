@@ -104,4 +104,8 @@ std::shared_ptr<void> SharedObjectWrapper::asObjectSharedPointer()
     return reference;
 }
 
+SerializableSharedObjectClassTag::~SerializableSharedObjectClassTag()
+{
+}
+
 } // End of namespace coal

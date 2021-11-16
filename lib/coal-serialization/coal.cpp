@@ -1835,7 +1835,7 @@ void Serializer::prepareForWriting()
         cluster->pushDataIntoBinaryBlob(binaryBlobBuilder);
         typeDescriptorContext.addObjectTypeMapper(cluster->typeMapper);
         for(auto instance : cluster->instances)
-            objectPointerToInstanceIndexTable.insert({instance->getObjectBasePointer(), objectCount++});
+            objectPointerToInstanceIndexTable.insert({instance->getObjectBasePointer(), uint32_t(objectCount++)});
     }
 
     output->setObjectPointerToIndexMap(&objectPointerToInstanceIndexTable);

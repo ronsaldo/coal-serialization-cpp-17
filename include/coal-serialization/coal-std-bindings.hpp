@@ -549,6 +549,8 @@ struct SerializableSharedObjectClassTag
 {
     typedef void SerializableSuperType;
 
+    virtual ~SerializableSharedObjectClassTag();
+
     virtual TypeMapperPtr getCoalTypeMapper() const = 0;
 };
 

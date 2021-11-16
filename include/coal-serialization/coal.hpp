@@ -485,6 +485,10 @@ public:
 
     virtual TypeDescriptorPtr getOrCreateTypeDescriptor(TypeDescriptorContext *context) = 0;
 
+    virtual TypeMapperPtr getSuperType() const;
+    virtual void addSubtype(const TypeMapperPtr &subtype);
+    virtual void subtypesDo(const TypeMapperIterationBlock &aBlock);
+
     virtual void typeMapperDependenciesDo(const TypeMapperIterationBlock &aBlock);
     virtual void withTypeMapperDependenciesDo(const TypeMapperIterationBlock &aBlock);
 
@@ -609,14 +613,19 @@ public:
     static TypeMapperPtr makeWithFields(const std::string &name, const TypeMapperPtr &superType, const ObjectMapperFactory &factory, const std::vector<FieldDescription> &fields);
 
     virtual void writeFieldWith(void *, WriteStream *) override;
+    virtual void writeInstanceWith(void *basePointer, WriteStream *output) override;
     virtual TypeDescriptorPtr getOrCreateTypeDescriptor(TypeDescriptorContext *) override;
 
-    void typeMapperDependenciesDo(const TypeMapperIterationBlock &aBlock) override;
+    virtual TypeMapperPtr getSuperType() const override;
+    virtual void addSubtype(const TypeMapperPtr &subtype) override;
+    virtual void subtypesDo(const TypeMapperIterationBlock &aBlock) override;
+    virtual void typeMapperDependenciesDo(const TypeMapperIterationBlock &aBlock) override;
 
     virtual void objectReferencesInInstanceDo(void *instancePointer, std::unordered_map<void*, ObjectMapperPtr> *cache, const ObjectReferenceIterationBlock &aBlock) override;
 
     TypeMapperWeakPtr superType;
     ObjectMapperFactory factory;
+    std::vector<TypeMapperWeakPtr> subtypes;
 };
 
 /**
@@ -908,10 +917,22 @@ public:
         }
     }
 
-
     virtual TypeDescriptorPtr getOrCreateTypeDescriptor(TypeDescriptorContext *context) override
     {
         return context->getOrCreatePrimitiveTypeDescriptor(EncodingDescriptorKind);
+    }
+};
+
+template<>
+struct TypeMapperFor<void>
+{
+    static constexpr bool IsObjectType = false;
+    static constexpr bool IsReferenceType = false;
+    static constexpr bool IsValueType = true;
+
+    static TypeMapperPtr apply()
+    {
+        return nullptr;
     }
 };
 
@@ -969,7 +990,7 @@ template<typename T, typename C=void>
 struct StructureTypeMetadataFor;
 
 template<typename T>
-struct StructureTypeMetadataFor<T, typename std::enable_if< std::is_base_of<SerializableStructureTag, T>::value >::type>
+struct InlineStructureTypeMetadataFor
 {
     typedef void type;
 
@@ -983,6 +1004,9 @@ struct StructureTypeMetadataFor<T, typename std::enable_if< std::is_base_of<Seri
         return T::__coal_typename__;
     }
 };
+
+template<typename T>
+struct StructureTypeMetadataFor<T, typename std::enable_if< std::is_base_of<SerializableStructureTag, T>::value >::type> : InlineStructureTypeMetadataFor<T> {};
 
 template<typename T>
 struct ReflectedStructureTypeMapperFor
@@ -1028,7 +1052,7 @@ struct ReflectedClassTypeMapperFor
         static TypeMapperPtr singleton;
         static std::once_flag singletonCreation;
         std::call_once(singletonCreation, [&](){
-            singleton = ObjectTypeMapper::makeWithFields(Metadata::getTypeName(), nullptr, Metadata::newInstance, Metadata::getFields());
+            singleton = ObjectTypeMapper::makeWithFields(Metadata::getTypeName(), Metadata::getSuperType(), Metadata::newInstance, Metadata::getFields());
         });
 
         return singleton;
@@ -1037,7 +1061,6 @@ struct ReflectedClassTypeMapperFor
 
 template<typename T>
 struct TypeMapperFor<T, typename ClassTypeMetadataFor<T>::type> : ReflectedClassTypeMapperFor<T> {};
-
 
 /**
  * I am an accessor for a member field.
@@ -1270,12 +1293,12 @@ private:
  * Convenience method for serializing Coal objects and values.
  */
 template<typename VT>
-std::vector<uint8_t> serialize(VT &&value)
+std::vector<uint8_t> serialize(const VT &value)
 {
     std::vector<uint8_t> result;
     MemoryWriteStream output(result);
     Serializer serializer(&output);
-    serializer.serializeRootObjectOrValue(std::forward<VT> (value));
+    serializer.serializeRootObjectOrValue(value);
     return result;
 }
 
@@ -1288,6 +1311,13 @@ std::optional<RT> deserialize(const std::vector<uint8_t> &data)
     MemoryReadStream input(data.data(), data.size());
     Deserializer deserializer(&input);
     return deserializer.deserializeRootObjectOrValueOfType<RT> ();
+}
+
+
+template<typename...Types>
+void ensureTypeMapperForTypesExists()
+{
+    (void(typeMapperForType<Types> ()) , ...);
 }
 
 } // End of namespace coal

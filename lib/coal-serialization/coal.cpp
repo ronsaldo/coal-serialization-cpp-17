@@ -1072,6 +1072,21 @@ ObjectMapperPtr TypeMapper::makeInstance()
     abort();
 }
 
+TypeMapperPtr TypeMapper::getSuperType() const
+{
+    return nullptr;
+}
+
+void TypeMapper::addSubtype(const TypeMapperPtr &subtype)
+{
+    (void)subtype;
+}
+
+void TypeMapper::subtypesDo(const TypeMapperIterationBlock &aBlock)
+{
+    (void)aBlock;
+}
+
 void TypeMapper::typeMapperDependenciesDo(const TypeMapperIterationBlock &aBlock)
 {
     (void)aBlock;
@@ -1164,6 +1179,9 @@ void TransitiveClosureTypeMapperRegistry::addWithDependencies(const TypeMapperPt
     nameMap.insert({typeMapper->getName(), typeMapper});
     typeMapper->typeMapperDependenciesDo([&](const TypeMapperPtr &dependency) {
         addWithDependencies(dependency);
+    });
+    typeMapper->subtypesDo([&](const TypeMapperPtr &subtype) {
+        addWithDependencies(subtype);
     });
 }
 
@@ -1286,6 +1304,8 @@ TypeMapperPtr ObjectTypeMapper::makeWithFields(const std::string &name, const Ty
     result->superType = superType;
     result->addFields(fields);
     result->factory = factory;
+    if(superType)
+        superType->addSubtype(result);
     return result;
 }
 
@@ -1295,9 +1315,37 @@ void ObjectTypeMapper::writeFieldWith(void *, WriteStream *)
     abort();
 }
 
+void ObjectTypeMapper::writeInstanceWith(void *basePointer, WriteStream *output)
+{
+    auto st = superType.lock();
+    if(st)
+        st->writeInstanceWith(basePointer, output);
+    AggregateTypeMapper::writeInstanceWith(basePointer, output);
+}
+
 TypeDescriptorPtr ObjectTypeMapper::getOrCreateTypeDescriptor(TypeDescriptorContext *)
 {
     abort();
+}
+
+TypeMapperPtr ObjectTypeMapper::getSuperType() const
+{
+    return superType.lock();
+}
+
+void ObjectTypeMapper::addSubtype(const TypeMapperPtr &subtype)
+{
+    subtypes.push_back(subtype);
+}
+
+void ObjectTypeMapper::subtypesDo(const TypeMapperIterationBlock &aBlock)
+{
+    for(auto &st : subtypes)
+    {
+        auto subtype = st.lock();
+        if(subtype)
+            aBlock(subtype);
+    }
 }
 
 void ObjectTypeMapper::typeMapperDependenciesDo(const TypeMapperIterationBlock &aBlock)
@@ -1305,6 +1353,7 @@ void ObjectTypeMapper::typeMapperDependenciesDo(const TypeMapperIterationBlock &
     auto st = superType.lock();
     if(st)
         st->withTypeMapperDependenciesDo(aBlock);
+
     AggregateTypeMapper::typeMapperDependenciesDo(aBlock);
 }
 
@@ -1711,10 +1760,21 @@ SerializationClusterPtr Serializer::getOrCreateClusterFor(const TypeMapperPtr &t
     if(it != typeMapperToClustersMap.end())
         return it->second;
 
+    SerializationClusterPtr supertypeCluster;
+    auto superType = typeMapper->getSuperType();
+    if(superType)
+    {
+        supertypeCluster = getOrCreateClusterFor(superType);
+        it = typeMapperToClustersMap.find(typeMapper);
+        if(it != typeMapperToClustersMap.end())
+            return it->second;
+    }
+
     auto newCluster = std::make_shared<SerializationCluster> ();
     newCluster->name = typeMapper->getName();
     newCluster->typeMapper = typeMapper;
     newCluster->index = clusters.size();
+    newCluster->supertype = supertypeCluster;
     clusters.push_back(newCluster);
     typeMapperToClustersMap.insert(std::make_pair(typeMapper, newCluster));
 
@@ -1735,7 +1795,7 @@ void Serializer::writeHeader()
     output->writeUInt32(uint32_t(binaryBlobBuilder.getDataSize())); // Blob size
     output->writeUInt32(typeDescriptorContext.getValueTypeCount()); // Value type layouts size
     output->writeUInt32(uint32_t(clusters.size())); // Cluster Count
-    output->writeUInt32(uint32_t(objectCount)); // Cluster Count
+    output->writeUInt32(uint32_t(objectCount)); // Object Count
 }
 
 void Serializer::writeBlob()

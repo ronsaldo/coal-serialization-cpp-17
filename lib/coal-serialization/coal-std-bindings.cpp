@@ -84,4 +84,24 @@ TypeDescriptorPtr StdStringTypeMapper::getOrCreateTypeDescriptor(TypeDescriptorC
     return context->getOrCreatePrimitiveTypeDescriptor(TypeDescriptorKind::UTF8_32_32);
 }
 
+SharedObjectWrapper::SharedObjectWrapper(const ValueTypePtr &initialReference, const TypeMapperPtr &initialTypeMapper)
+    : reference(initialReference), typeMapper(initialTypeMapper)
+{
+}
+
+TypeMapperPtr SharedObjectWrapper::getTypeMapper() const
+{
+    return typeMapper;
+}
+
+void *SharedObjectWrapper::getObjectBasePointer()
+{
+    return reference.get();
+}
+
+std::shared_ptr<void> SharedObjectWrapper::asObjectSharedPointer()
+{
+    return reference;
+}
+
 } // End of namespace coal

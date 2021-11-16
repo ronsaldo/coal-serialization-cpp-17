@@ -216,11 +216,9 @@ struct TestNestedStructureWithDifferentOrder
 /**
  * TestSharedObject
  */
-class TestSharedObject : public coal::SerializableSharedObjectClassTag
+class TestSharedObject : public coal::MakeSerializableSharedSubclassOf<TestSharedObject, void>
 {
 public:
-    typedef TestSharedObject SelfType;
-
     static constexpr char const __coal_typename__[] = "TestSharedObject";
 
     static coal::FieldDescriptions __coal_fields__()
@@ -253,11 +251,9 @@ public:
 /**
  * TestSharedObjectOuter
  */
-class TestSharedObjectOuter : public coal::SerializableSharedObjectClassTag
+class TestSharedObjectOuter : public coal::MakeSerializableSharedSubclassOf<TestSharedObjectOuter, void>
 {
 public:
-    typedef TestSharedObjectOuter SelfType;
-
     static constexpr char const __coal_typename__[] = "TestSharedObjectOuter";
 
     static coal::FieldDescriptions __coal_fields__()
@@ -289,11 +285,9 @@ public:
 /**
  * TestSharedCyclicObject
  */
-class TestSharedCyclicObject : public coal::SerializableSharedObjectClassTag
+class TestSharedCyclicObject : public coal::MakeSerializableSharedSubclassOf<TestSharedCyclicObject, void>
 {
 public:
-    typedef TestSharedCyclicObject SelfType;
-
     static constexpr char const __coal_typename__[] = "TestSharedCyclicObject";
 
     static coal::FieldDescriptions __coal_fields__()
@@ -311,11 +305,9 @@ public:
 /**
  * TestSharedCyclicObject
  */
-class TestSharedObjectWithCollections : public coal::SerializableSharedObjectClassTag
+class TestSharedObjectWithCollections : public coal::MakeSerializableSharedSubclassOf<TestSharedObjectWithCollections, void>
 {
 public:
-    typedef TestSharedObjectWithCollections SelfType;
-
     static constexpr char const __coal_typename__[] = "TestSharedObjectWithCollections";
 
     static coal::FieldDescriptions __coal_fields__()
@@ -375,10 +367,83 @@ struct StructureTypeMetadataFor<TestNestedStructureWithDifferentOrder>
 
 }
 
+class TestSharedShape : public coal::MakeSerializableSharedSubclassOf<TestSharedShape, void>
+{
+public:
+    static constexpr char const __coal_typename__[] = "Shape";
+
+    static coal::FieldDescriptions __coal_fields__()
+    {
+        return {
+            {"centerX", &SelfType::centerX},
+            {"centerY", &SelfType::centerY},
+        };
+    }
+
+    virtual bool isCircle() const
+    {
+        return false;
+    }
+
+    virtual bool isBox() const
+    {
+        return false;
+    }
+
+    float centerX;
+    float centerY;
+};
+
+class TestSharedCircle : public coal::MakeSerializableSharedSubclassOf<TestSharedCircle, TestSharedShape>
+{
+public:
+    static constexpr char const __coal_typename__[] = "Circle";
+
+    static coal::FieldDescriptions __coal_fields__()
+    {
+        return {
+            {"radius", &SelfType::radius}
+        };
+    }
+
+    virtual bool isCircle() const override
+    {
+        return true;
+    }
+
+    float radius;
+};
+
+class TestSharedBox : public coal::MakeSerializableSharedSubclassOf<TestSharedBox, TestSharedShape>
+{
+public:
+    static constexpr char const __coal_typename__[] = "Box";
+
+    static coal::FieldDescriptions __coal_fields__()
+    {
+        return {
+            {"width", &SelfType::width},
+            {"height", &SelfType::height}
+        };
+    }
+
+    virtual bool isBox() const
+    {
+        return true;
+    }
+
+    float width;
+    float height;
+};
+
+typedef std::shared_ptr<TestSharedShape> TestSharedShapePtr;
+typedef std::vector<TestSharedShapePtr> TestSharedShapePtrList;
+
 int main()
 {
     int testErrorCount = 0;
-    
+    coal::ensureTypeMapperForTypesExists<TestSharedBox, TestSharedCircle> ();
+
     // Primitive values
     {
         assertEquals(false, coal::deserialize<bool> (coal::serialize(false)).value());
@@ -585,6 +650,59 @@ int main()
         assertEquals(materializedFirst, materializedObject->map.at("First"));
         assertEquals(materializedSecond, materializedObject->map.at("Second"));
         assertEquals(materializedThird, materializedObject->map.at("Third"));
+    }
+
+    // Empty shape list
+    {
+        auto materialized = coal::deserialize<TestSharedShapePtrList> (coal::serialize(TestSharedShapePtrList{})).value();
+        assertEquals(0, materialized.size());
+    }
+
+    // Non empty shape list
+    {
+        TestSharedShapePtrList shapeList;
+
+        {
+            auto shape = std::make_shared<TestSharedBox> ();
+            shape->centerX = -2;
+            shape->centerY = -3;
+            shape->width = 1;
+            shape->height = 2;
+            shapeList.push_back(shape);
+        }
+
+        {
+            auto shape = std::make_shared<TestSharedCircle> ();
+            shape->centerX = -5;
+            shape->centerY = -6;
+            shape->radius = 3;
+            shapeList.push_back(shape);
+        }
+
+        auto serialized = coal::serialize(shapeList);
+        auto materialized = coal::deserialize<TestSharedShapePtrList> (serialized).value();
+        assertEquals(2, materialized.size());
+
+        {
+            assertEquals(true, materialized[0]->isBox());
+            assertEquals(false, materialized[0]->isCircle());
+
+            auto shape = std::static_pointer_cast<TestSharedBox> (materialized[0]);
+            assertEquals(-2, shape->centerX);
+            assertEquals(-3, shape->centerY);
+            assertEquals(1, shape->width);
+            assertEquals(2, shape->height);
+        }
+
+        {
+            assertEquals(false, materialized[1]->isBox());
+            assertEquals(true, materialized[1]->isCircle());
+
+            auto shape = std::static_pointer_cast<TestSharedCircle> (materialized[1]);
+            assertEquals(-5, shape->centerX);
+            assertEquals(-6, shape->centerY);
+            assertEquals(3, shape->radius);
+        }
     }
 
     if(testErrorCount > 0)

@@ -479,19 +479,31 @@ struct TypeMapperFor<std::map<KT, VT>> : SingletonTypeMapperFor<StdMapTypeMapper
 template<typename KT, typename VT>
 struct TypeMapperFor<std::unordered_map<KT, VT>> : SingletonTypeMapperFor<StdMapTypeMapper<std::unordered_map<KT, VT>>> {};
 
+class SharedObjectWrapper : public ObjectMapper
+{
+public:
+    typedef std::shared_ptr<void> ValueTypePtr;
+    typedef SharedObjectWrapper ThisType;
+
+    SharedObjectWrapper(const ValueTypePtr &initialReference, const TypeMapperPtr &initialTypeMapper);
+
+    virtual TypeMapperPtr getTypeMapper() const override;
+    virtual void *getObjectBasePointer() override;
+    virtual std::shared_ptr<void> asObjectSharedPointer() override;
+
+    ValueTypePtr reference;
+    TypeMapperPtr typeMapper;
+};
+
 /**
- * I am a default wrapper object for a shared object. Shared objects are objects whose pointer are wrapper in a std::shared_ptr
+ * I wrap a specific std::shared_ptr<> instance.
  */
 template<typename VT>
-class SharedObjectWrapper : public ObjectMapper
+class SpecificSharedObjectWrapper
 {
 public:
     typedef VT ValueType;
     typedef std::shared_ptr<ValueType> ValueTypePtr;
-    typedef SharedObjectWrapper<ValueType> ThisType;
-
-    SharedObjectWrapper(const ValueTypePtr &initialReference = ValueTypePtr())
-        : reference(initialReference) {}
 
     static TypeMapperPtr typeMapperSingleton()
     {
@@ -500,7 +512,8 @@ public:
 
     static ObjectMapperPtr makeFor(const ValueTypePtr &value)
     {
-        return std::make_shared<ThisType> (value);
+        auto typeMapper = value ? value->getCoalTypeMapper() : typeMapperForType<ValueType> ();
+        return std::make_shared<SharedObjectWrapper> (value, typeMapper);
     }
 
     static ObjectMapperPtr makeFor(std::unordered_map<void *, ObjectMapperPtr> *cache, const ValueTypePtr &value)
@@ -522,36 +535,27 @@ public:
         if(!deserializedRootObject)
             return std::nullopt;
 
-        return std::static_pointer_cast<ThisType> (deserializedRootObject)->reference;
+        return 
+            std::reinterpret_pointer_cast<ValueType> (
+                std::static_pointer_cast<SharedObjectWrapper> (deserializedRootObject)->reference
+            );
     }
-
-    virtual TypeMapperPtr getTypeMapper() const override
-    {
-        return typeMapperSingleton();
-    }
-
-    virtual void *getObjectBasePointer() override
-    {
-        return reinterpret_cast<void*> (reference.get());
-    }
-
-    virtual std::shared_ptr<void> asObjectSharedPointer() override
-    {
-        return reference;
-    }
-
-    ValueTypePtr reference;
 };
 
 /**
  * Tag for marking a serializable shared object class.
  */
-struct SerializableSharedObjectClassTag {};
+struct SerializableSharedObjectClassTag
+{
+    typedef void SerializableSuperType;
+
+    virtual TypeMapperPtr getCoalTypeMapper() const = 0;
+};
 
 template<typename T>
 ObjectMapperPtr makeSharedObjectWrapperFor(const std::shared_ptr<T> &reference)
 {
-    return SharedObjectWrapper<T>::makeFor(reference);
+    return SpecificSharedObjectWrapper<T>::makeFor(reference);
 }
 
 template<typename T>
@@ -655,14 +659,13 @@ public:
         if(!*referencePointer)
             return;
 
-        auto wrapper = SharedObjectWrapper<ObjectType>::makeFor(cache, *referencePointer);
+        auto wrapper = SpecificSharedObjectWrapper<ObjectType>::makeFor(cache, *referencePointer);
         aBlock(wrapper);
     }
 };
 
 template<typename T>
 struct TypeMapperFor<std::shared_ptr<T>> : SingletonTypeMapperFor<SharedPtrTypeMapperFor<T>> {};
-
 
 template<typename T>
 struct ClassTypeMetadataFor<T, typename std::enable_if< std::is_base_of<SerializableSharedObjectClassTag, T>::value >::type>
@@ -683,12 +686,41 @@ struct ClassTypeMetadataFor<T, typename std::enable_if< std::is_base_of<Serializ
     {
         return T::__coal_typename__;
     }
+
+    static TypeMapperPtr getSuperType()
+    {
+        return typeMapperForType<typename T::SerializableSuperType> ();
+    }
 };
 
 template<typename T>
 struct ObjectMapperClassFor<std::shared_ptr<T>, typename std::enable_if<TypeMapperFor<T>::IsObjectType>::type>
 {
-    typedef SharedObjectWrapper<T> type;
+    typedef SpecificSharedObjectWrapper<T> type;
+};
+
+template<typename BaseType>
+struct MakeSerializableSharedSubclassOfBase : BaseType {};
+
+template<>
+struct MakeSerializableSharedSubclassOfBase<void> : SerializableSharedObjectClassTag {};
+
+template<typename SeT, typename SuT = void>
+struct MakeSerializableSharedSubclassOf : MakeSerializableSharedSubclassOfBase<SuT>
+{
+    typedef SeT SelfType;
+    typedef SuT SuperType;
+    typedef SuT SerializableSuperType;
+
+    static coal::FieldDescriptions __coal_fields__()
+    {
+        return {};
+    }
+
+    virtual coal::TypeMapperPtr getCoalTypeMapper() const override
+    {
+        return coal::typeMapperForType<SelfType> ();
+    }
 };
 
 } // End of namespace coal
